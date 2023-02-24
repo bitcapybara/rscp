@@ -4,3 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+s2n-quic = { version = "1.16.0", features = ["provider-address-token-default", "provider-tls-rustls"] }
+tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread", "macros", "fs"] }
