@@ -6,6 +6,7 @@ a rust implementation of scp
 * [ ] SHA256 checksum
 * [ ] One coroutine per file
 * [ ] DER CA format support
+* [ ] Dry run mode
 
 ## TLS
 * 企业内部生成私有CA，签发给每台主机

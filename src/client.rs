@@ -42,18 +42,29 @@ impl From<connection::Error> for ClientError {
 }
 
 pub struct Client {
-    conn: Connection,
+    client: s2n_quic::Client,
+    connect: Connect,
 }
 
 impl Client {
-    pub async fn new(provider: MtlsProvider, remote: SocketAddr) -> Result<Self> {
+    pub fn new(provider: MtlsProvider, remote: SocketAddr) -> Result<Self> {
         let client: s2n_quic::Client = s2n_quic::Client::builder()
             .with_tls(provider)?
             .with_io("0.0.0.0:0")?
             .start()?;
-        let connect = Connect::new(remote).with_server_name("localhost");
-        let conn = client.connect(connect).await?;
 
-        Ok(Self { conn })
+        let connect = Connect::new(remote).with_server_name("localhost");
+        Ok(Self { client, connect })
+    }
+
+    pub async fn start(mut self) -> Result<()> {
+        let mut conn = self.client.connect(self.connect).await?;
+        // stream per received file
+        while let Some(stream) = conn.accept_receive_stream().await? {
+            todo!()
+        }
+        // stream per send file
+        let stream = conn.open_send_stream().await?;
+        Ok(())
     }
 }

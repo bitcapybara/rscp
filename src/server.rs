@@ -1,6 +1,9 @@
 use std::{fmt::Display, io, net::SocketAddr};
 
-use s2n_quic::provider::{self, tls::rustls::rustls};
+use s2n_quic::{
+    connection,
+    provider::{self, tls::rustls::rustls},
+};
 
 use crate::mtls::MtlsProvider;
 
@@ -43,6 +46,12 @@ impl From<std::convert::Infallible> for ServerError {
     }
 }
 
+impl From<connection::Error> for ServerError {
+    fn from(value: connection::Error) -> Self {
+        todo!()
+    }
+}
+
 pub struct Server {
     server: s2n_quic::Server,
 }
@@ -57,8 +66,14 @@ impl Server {
     }
 
     pub async fn start(mut self) -> Result<()> {
+        // conn per client
         while let Some(mut conn) = self.server.accept().await {
-            let stream = conn.accept_bidirectional_stream().await;
+            // stream per received file
+            while let Some(stream) = conn.accept_receive_stream().await? {
+                todo!()
+            }
+            // stream per send file
+            let stream = conn.open_send_stream().await?;
             todo!()
         }
 
