@@ -9,9 +9,8 @@ use s2n_quic::{
 };
 
 use crate::{
-    connection::{recv_file, send_err, send_file, send_ok},
     mtls::MtlsProvider,
-    protocol::Handshake,
+    protocol::{self, Handshake},
 };
 
 type Result<T> = std::result::Result<T, Error>;
@@ -67,12 +66,6 @@ impl From<stream::Error> for Error {
     }
 }
 
-impl From<crate::connection::Error> for Error {
-    fn from(value: crate::connection::Error) -> Self {
-        todo!()
-    }
-}
-
 pub struct Endpoint {
     provider: MtlsProvider,
     addr: SocketAddr,
@@ -111,8 +104,8 @@ impl Endpoint {
             Ok(hs) => {
                 send_ok(&mut conn).await?;
                 match hs {
-                    Handshake::Recv(path) => recv_file(&mut conn, path).await?,
-                    Handshake::Send(path) => send_file(&mut conn, path).await?,
+                    Handshake::Recv(path) => todo!(),
+                    Handshake::Send(path) => todo!(),
                 }
             }
             Err(e) => {
@@ -139,4 +132,11 @@ impl Endpoint {
         let stream = conn.open_send_stream().await?;
         Ok(())
     }
+}
+async fn send_ok(conn: &mut Connection) -> Result<()> {
+    Ok(())
+}
+
+async fn send_err(conn: &mut Connection, msg: &str) -> Result<()> {
+    Ok(())
 }

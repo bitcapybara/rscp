@@ -541,6 +541,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "log",
+ "ring",
  "rustls-pemfile",
  "s2n-quic",
  "tokio",
@@ -821,7 +822,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8e00990ebabbe4c14c08aca901caed183ecd5c09562a12c824bb53d3c3fd3af"
 dependencies = [
  "autocfg",
+ "bytes",
  "libc",
+ "memchr",
  "mio",
  "num_cpus",
  "pin-project-lite",
