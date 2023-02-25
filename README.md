@@ -1,8 +1,11 @@
-# file transfer
+# rscp
+
+a rust implementation of scp
 
 * [ ] QUIC bidirectional stream
 * [ ] SHA256 checksum
 * [ ] One coroutine per file
+* [ ] DER CA format support
 
 ## TLS
 * 企业内部生成私有CA，签发给每台主机
