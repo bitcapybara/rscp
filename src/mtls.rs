@@ -35,8 +35,6 @@ impl tls::Provider for MtlsProvider {
             .with_client_cert_verifier(verifier)
             .with_single_cert(self.cert_chain, self.private_key)?;
         cfg.ignore_client_order = true;
-        // cfg.max_fragment_size = None;
-        // cfg.alpn_protocols = vec![b"h3".to_vec()];
         Ok(cfg.into())
     }
 
@@ -47,8 +45,6 @@ impl tls::Provider for MtlsProvider {
             .with_protocol_versions(PROTOCOL_VERSIONS)?
             .with_root_certificates(self.root_store)
             .with_single_cert(self.cert_chain, self.private_key)?;
-        // cfg.max_fragment_size = None;
-        // cfg.alpn_protocols = vec![b"h3".to_vec()];
         Ok(cfg.into())
     }
 }
@@ -76,14 +72,14 @@ fn into_certificate(mut cert: &[u8]) -> Result<Vec<Vec<u8>>, rustls::Error> {
     Ok(certs)
 }
 
-fn into_root_store(mut cert: &[u8]) -> Result<rustls::RootCertStore, rustls::Error> {
+fn into_root_store(cert: &[u8]) -> Result<rustls::RootCertStore, rustls::Error> {
     let ca_cert = into_certificate(cert)?;
     let mut cert_store = rustls::RootCertStore::empty();
     cert_store.add_parsable_certificates(ca_cert.as_slice());
     Ok(cert_store)
 }
 
-fn into_private_key(mut key: &[u8]) -> Result<Vec<u8>, rustls::Error> {
+fn into_private_key(key: &[u8]) -> Result<Vec<u8>, rustls::Error> {
     let mut cursor = Cursor::new(key);
     let parsers = [
         rustls_pemfile::rsa_private_keys,
