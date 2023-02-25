@@ -3,6 +3,7 @@ use std::{fmt::Display, io, net::SocketAddr};
 use s2n_quic::{
     connection,
     provider::{self, tls::rustls::rustls},
+    stream,
 };
 
 use crate::mtls::MtlsProvider;
@@ -12,6 +13,8 @@ type Result<T> = std::result::Result<T, ServerError>;
 #[derive(Debug)]
 pub enum ServerError {
     Io(String),
+    Stopped,
+    MissHandsake,
 }
 
 impl std::error::Error for ServerError {}
@@ -52,6 +55,12 @@ impl From<connection::Error> for ServerError {
     }
 }
 
+impl From<stream::Error> for ServerError {
+    fn from(value: stream::Error) -> Self {
+        todo!()
+    }
+}
+
 pub struct Server {
     server: s2n_quic::Server,
 }
@@ -68,6 +77,9 @@ impl Server {
     pub async fn start(mut self) -> Result<()> {
         // conn per client
         while let Some(mut conn) = self.server.accept().await {
+            // first recv a message
+            let mut peer = conn.accept().await?.ok_or(ServerError::Stopped)?;
+            let handshake = peer.receive().await?.ok_or(ServerError::MissHandsake)?;
             // stream per received file
             while let Some(stream) = conn.accept_receive_stream().await? {
                 todo!()
