@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-pub mod client;
+mod connection;
+pub mod endpoint;
 mod mtls;
 mod protocol;
-pub mod server;
