@@ -27,12 +27,30 @@ pub enum Action {
 impl Action {
     pub async fn decode(stream: &mut BidirectionalStream) -> Result<Self> {
         match stream.receive().await? {
-            Some(buf) => todo!(),
+            Some(mut buf) => {
+                // magic number
+                assert_len(&buf, 2)?;
+                if buf.get_u16() != MAGIC_NUMBER {
+                    // TODO send error message
+                    return Err(Error::MissMagicNumber);
+                }
+                // action
+                assert_len(&buf, 1)?;
+                match buf.get_u8() {
+                    0x01 => Ok(Self::Get),
+                    0x02 => Ok(Self::Post),
+                    _ => Err(Error::Malformed),
+                }
+            }
             None => Err(Error::StreamClosed),
         }
     }
-    pub async fn encode(stream: &mut BidirectionalStream) -> Result<()> {
-        todo!()
+    pub async fn encode(self, stream: &mut BidirectionalStream) -> Result<()> {
+        let mut buf = BytesMut::with_capacity(3);
+        buf.put_u16(MAGIC_NUMBER);
+        buf.put_u8(self as u8);
+        stream.send(buf.freeze()).await?;
+        Ok(())
     }
 }
 
@@ -112,11 +130,6 @@ impl File {
     }
 
     fn decode(buf: &mut Bytes) -> Result<Self> {
-        // magic number
-        assert_len(buf, 2)?;
-        if buf.get_u16() != MAGIC_NUMBER {
-            return Err(Error::MissMagicNumber);
-        }
         // path
         assert_len(buf, 2)?;
         let path_len = buf.get_u16() as usize;
@@ -136,8 +149,6 @@ impl File {
             return Err(Error::Malformed);
         }
         let mut buf = BytesMut::new();
-        // magic number
-        buf.put_u16(MAGIC_NUMBER);
         // path
         let path = path.canonicalize()?;
         let path_bytes = path.to_str().ok_or(Error::Malformed)?.as_bytes();

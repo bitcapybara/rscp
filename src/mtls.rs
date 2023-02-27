@@ -35,16 +35,18 @@ impl tls::Provider for MtlsProvider {
             .with_client_cert_verifier(verifier)
             .with_single_cert(self.cert_chain, self.private_key)?;
         cfg.ignore_client_order = true;
+        cfg.alpn_protocols = vec![b"h3".to_vec()];
         Ok(cfg.into())
     }
 
     fn start_client(self) -> Result<Self::Client, Self::Error> {
-        let cfg = rustls::ClientConfig::builder()
+        let mut cfg = rustls::ClientConfig::builder()
             .with_cipher_suites(DEFAULT_CIPHERSUITES)
             .with_safe_default_kx_groups()
             .with_protocol_versions(PROTOCOL_VERSIONS)?
             .with_root_certificates(self.root_store)
             .with_single_cert(self.cert_chain, self.private_key)?;
+        cfg.alpn_protocols = vec![b"h3".to_vec()];
         Ok(cfg.into())
     }
 }
