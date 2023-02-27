@@ -55,14 +55,15 @@ impl From<io::Error> for Error {
 }
 
 /// request from client
-pub enum Action {
-    /// path must exists
+pub enum Method {
+    /// path in server
     Get(PathBuf),
+    /// path in server
     Post(PathBuf),
 }
 
-impl Action {
-    pub async fn decode(stream: &mut PeerStream) -> Result<Self> {
+impl Method {
+    pub async fn decode(stream: &mut BidirectionalStream) -> Result<Self> {
         match stream.receive().await? {
             Some(mut buf) => {
                 // magic number
@@ -99,8 +100,8 @@ impl Action {
         let mut buf = BytesMut::with_capacity(3);
         buf.put_u16(MAGIC_NUMBER);
         let n = match self {
-            Action::Get(_) => 0x01,
-            Action::Post(_) => 0x02,
+            Method::Get(_) => 0x01,
+            Method::Post(_) => 0x02,
         };
         buf.put_u8(n);
         stream.send(buf.freeze()).await?;

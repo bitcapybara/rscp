@@ -12,7 +12,7 @@ use s2n_quic::{
 
 use crate::{
     mtls::MtlsProvider,
-    protocol::{self, Action, File},
+    protocol::{self, File, Method},
 };
 
 type Result<T> = std::result::Result<T, Error>;
@@ -74,6 +74,18 @@ impl From<protocol::Error> for Error {
     }
 }
 
+pub enum Action {
+    /// cp remote:/path /path
+    Get(PathTuple),
+    /// cp /path remote:/path
+    Post(PathTuple),
+}
+
+pub struct PathTuple {
+    local: PathBuf,
+    remote: PathBuf,
+}
+
 pub struct Endpoint {
     provider: MtlsProvider,
     addr: SocketAddr,
@@ -106,15 +118,18 @@ impl Endpoint {
 
     async fn handle_conn(mut conn: Connection) -> Result<()> {
         // first recv handshake message
-        let mut stream = conn.accept().await?.ok_or(Error::Stopped)?;
-        match Action::decode(&mut stream).await {
+        let mut stream = conn
+            .accept_bidirectional_stream()
+            .await?
+            .ok_or(Error::Stopped)?;
+        match Method::decode(&mut stream).await {
             Ok(action) => {
                 // TODO send ok
                 stream.send(Bytes::new()).await?;
                 // close stream
                 stream.close().await?;
                 match action {
-                    Action::Get(path) => {
+                    Method::Get(path) => {
                         // send files under path to client
                         let paths = list_all_files(path).await?;
                         let mut futs = Vec::with_capacity(paths.len());
@@ -128,7 +143,7 @@ impl Endpoint {
                         // TODO process error
                         future::join_all(futs).await;
                     }
-                    Action::Post(path) => {
+                    Method::Post(path) => {
                         // recv and save files from client
                         let mut futs = Vec::new();
                         // coroutine per file
@@ -152,20 +167,50 @@ impl Endpoint {
         Ok(())
     }
 
-    pub async fn start_client(self) -> Result<()> {
+    pub async fn start_client(self, action: Action) -> Result<()> {
+        // build connection
         let client: s2n_quic::Client = s2n_quic::Client::builder()
             .with_tls(self.provider)?
             .with_io("0.0.0.0:0")?
             .start()?;
-
         let connect = Connect::new(self.addr).with_server_name("localhost");
         let mut conn = client.connect(connect).await?;
-        // stream per received file
-        while let Some(stream) = conn.accept_receive_stream().await? {
-            todo!()
+        // send method to server
+        let mut stream = conn.open_bidirectional_stream().await?;
+        match action {
+            Action::Get(PathTuple { local, remote }) => {
+                // send get message
+                protocol::Method::Get(remote).encode(&mut stream).await?;
+                // TODO recv ok/err
+                let _ = stream.receive().await?.ok_or(Error::Stopped)?;
+                // recv files
+                let mut futs = Vec::new();
+                while let Some(stream) = conn.accept_bidirectional_stream().await? {
+                    let (task, handle) = File::handle_recv(stream, local.clone()).remote_handle();
+                    tokio::spawn(task);
+                    futs.push(handle);
+                }
+                // TODO process error
+                future::join_all(futs).await;
+            }
+            Action::Post(PathTuple { local, remote }) => {
+                // send post message
+                protocol::Method::Post(remote).encode(&mut stream).await?;
+                // TODO recv ok/err
+                let _ = stream.receive().await?.ok_or(Error::Stopped)?;
+                // send files
+                let paths = list_all_files(local).await?;
+                let mut futs = Vec::with_capacity(paths.len());
+                for path in paths {
+                    let stream = conn.open_bidirectional_stream().await?;
+                    let (task, handle) = File::handle_send(stream, path).remote_handle();
+                    tokio::spawn(task);
+                    futs.push(handle);
+                }
+                // TODO process error
+                future::join_all(futs).await;
+            }
         }
-        // stream per send file
-        let stream = conn.open_send_stream().await?;
         Ok(())
     }
 }
