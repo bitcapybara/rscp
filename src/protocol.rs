@@ -9,7 +9,7 @@ use std::{
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use ring::digest;
-use s2n_quic::stream::{self, ReceiveStream};
+use s2n_quic::stream::{self, ReceiveStream, SendStream};
 use tokio::{
     fs::OpenOptions,
     io::{AsyncWriteExt, BufWriter},
@@ -53,78 +53,17 @@ impl From<io::Error> for Error {
     }
 }
 
-pub enum Handshake {
-    // copy file from remote to local
-    Recv(PathBuf),
-    // copy file from local to remote
-    Send(PathBuf),
-}
-
-impl Handshake {
-    pub fn decode(mut buf: Bytes) -> Result<Self> {
-        // check magic number
-        if buf.len() < 2 || buf.get_u16() != MAGIC_NUMBER {
-            return Err(Error::MissMagicNumber);
-        }
-
-        // get handshake type
-        if buf.is_empty() {
-            return Err(Error::Malformed);
-        }
-        match buf.get_u8() {
-            0x01 => Ok(Handshake::Recv(Self::decode_path(&mut buf)?)),
-            0x02 => Ok(Handshake::Send(Self::decode_path(&mut buf)?)),
-            _ => Err(Error::UnknownHandshake),
-        }
-    }
-
-    fn decode_path(buf: &mut Bytes) -> Result<PathBuf> {
-        if buf.len() < 2 {
-            return Err(Error::Malformed);
-        }
-
-        let path_len = buf.get_u16() as usize;
-        if buf.len() < path_len {
-            return Err(Error::Malformed);
-        }
-        let path_bytes = buf.split_to(path_len).to_vec();
-        Ok(PathBuf::from(String::from_utf8(path_bytes)?))
-    }
-
-    pub fn encode(self) -> Result<Bytes> {
-        let mut buf = BytesMut::new();
-        buf.put_u16(MAGIC_NUMBER);
-        let path = match self {
-            Handshake::Recv(path) => {
-                buf.put_u8(1);
-                path
-            }
-            Handshake::Send(path) => {
-                buf.put_u8(2);
-                path
-            }
-        };
-        Self::encode_path(&mut buf, path)?;
-        Ok(buf.freeze())
-    }
-
-    fn encode_path(buf: &mut BytesMut, path: PathBuf) -> Result<()> {
-        let path_str = path.to_str().ok_or(Error::Malformed)?;
-        buf.put_u16(path_str.len() as u16);
-        buf.extend_from_slice(path_str.as_bytes());
-        Ok(())
-    }
-}
-
 struct File {
     /// file absolute path
     path: PathBuf,
+    /// is dir
+    is_dir: bool,
     /// permission
     permission: u32,
 }
 
 impl File {
-    pub async fn recv_file(stream: &mut ReceiveStream) -> Result<()> {
+    pub async fn handle_recv(stream: &mut ReceiveStream) -> Result<()> {
         let mut buf = stream.receive().await?.ok_or(Error::StreamClosed)?;
         let metadata = Self::decode(&mut buf)?;
 
@@ -159,6 +98,11 @@ impl File {
     }
 
     fn decode(buf: &mut Bytes) -> Result<Self> {
+        // magic number
+        assert_len(buf, 2)?;
+        if buf.get_u16() != MAGIC_NUMBER {
+            return Err(Error::MissMagicNumber);
+        }
         // path
         assert_len(buf, 2)?;
         let path_len = buf.get_u16() as usize;
@@ -166,11 +110,34 @@ impl File {
         let path_bytes = buf.split_to(path_len).to_vec();
         let path = PathBuf::from(String::from_utf8(path_bytes)?);
 
+        // is dir
+        assert_len(buf, 1)?;
+        let is_dir = buf.get_u8() == 1;
+
         // permission
         assert_len(buf, 4)?;
         let permission = buf.get_u32();
 
-        Ok(File { path, permission })
+        Ok(File {
+            path,
+            is_dir,
+            permission,
+        })
+    }
+
+    pub async fn handle_send(stream: &mut SendStream, path: &Path) -> Result<()> {
+        if !path.exists() {
+            return Err(Error::Malformed);
+        }
+        // path
+        let path = path.to_path_buf();
+        // is dir
+        let is_dir = path.is_dir();
+        // file
+        let file = OpenOptions::new().read(true).open(path).await?;
+        // permission
+        let permission = file.metadata().await?.permissions().mode();
+        Ok(())
     }
 }
 
