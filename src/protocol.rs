@@ -111,17 +111,22 @@ impl Action {
 pub struct File {
     /// file absolute path
     path: PathBuf,
+    /// file or empty dir
+    is_dir: bool,
     /// permission
     permission: u32,
 }
 
 impl File {
-    pub async fn handle_recv(stream: &mut BidirectionalStream) -> Result<()> {
+    pub async fn handle_recv(stream: &mut BidirectionalStream, path: &Path) -> Result<()> {
         let mut buf = stream.receive().await?.ok_or(Error::StreamClosed)?;
         let metadata = Self::decode(&mut buf)?;
 
         // write file
-        let file = OpenOptions::new().append(true).open(metadata.path).await?;
+        let file = OpenOptions::new()
+            .append(true)
+            .open(path.join(metadata.path))
+            .await?;
         file.set_permissions(Permissions::from_mode(metadata.permission))
             .await?;
         let mut bw = BufWriter::new(file.try_clone().await?);
@@ -156,12 +161,19 @@ impl File {
         assert_len(buf, path_len)?;
         let path_bytes = buf.split_to(path_len).to_vec();
         let path = PathBuf::from(String::from_utf8(path_bytes)?);
+        // is dir
+        assert_len(buf, 1)?;
+        let is_dir = buf.get_u8() == 1;
 
         // permission
         assert_len(buf, 4)?;
         let permission = buf.get_u32();
 
-        Ok(File { path, permission })
+        Ok(File {
+            path,
+            is_dir,
+            permission,
+        })
     }
 
     pub async fn handle_send(stream: &mut BidirectionalStream, path: &Path) -> Result<()> {
@@ -174,6 +186,8 @@ impl File {
         let path_bytes = path.to_str().ok_or(Error::Malformed)?.as_bytes();
         buf.put_u16(path_bytes.len() as u16);
         buf.put_slice(path_bytes);
+        // is dir
+        buf.put_u8(path.is_dir() as u8);
         // file
         let file = OpenOptions::new().read(true).open(path).await?;
         // permission

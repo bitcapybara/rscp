@@ -1,10 +1,6 @@
-use std::{
-    fmt::Display,
-    io,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-};
+use std::{fmt::Display, io, net::SocketAddr, path::PathBuf};
 
+use bytes::Bytes;
 use log::error;
 use s2n_quic::{
     client::Connect,
@@ -15,7 +11,7 @@ use s2n_quic::{
 
 use crate::{
     mtls::MtlsProvider,
-    protocol::{self, Action},
+    protocol::{self, Action, File},
 };
 
 type Result<T> = std::result::Result<T, Error>;
@@ -110,14 +106,40 @@ impl Endpoint {
     async fn handle_conn(mut conn: Connection) -> Result<()> {
         // first recv handshake message
         let mut stream = conn.accept().await?.ok_or(Error::Stopped)?;
-        match Action::decode(&mut stream).await? {
-            Action::Get => {
-                // send files under path to client
-                todo!()
+        match Action::decode(&mut stream).await {
+            Ok(action) => {
+                // TODO send ok
+                stream.send(Bytes::new()).await?;
+                // close stream
+                stream.close().await?;
+                match action {
+                    Action::Get(path) => {
+                        // TODO send ok/err
+                        // close stream
+                        stream.close().await?;
+                        // send files under path to client
+                        let mut stream = conn.open_bidirectional_stream().await?;
+                        let paths = list_all_files(path).await?;
+                        for path in paths {
+                            File::handle_send(&mut stream, &path).await?;
+                        }
+                    }
+                    Action::Post(path) => {
+                        // TODO send ok/err
+                        stream.send(Bytes::new()).await?;
+                        // recv and save files from client
+                        let mut stream = conn
+                            .accept_bidirectional_stream()
+                            .await?
+                            .ok_or(Error::Stopped)?;
+                        File::handle_recv(&mut stream, &path).await?;
+                    }
+                }
             }
-            Action::Post => {
-                // recv and save files from client
-                todo!()
+            Err(e) => {
+                // TODO send err
+
+                error!("decode action error: {e}")
             }
         }
         Ok(())
