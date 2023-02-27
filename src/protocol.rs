@@ -9,15 +9,32 @@ use std::{
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use ring::digest;
-use s2n_quic::stream::{self, ReceiveStream, SendStream};
+use s2n_quic::stream::{self, BidirectionalStream};
 use tokio::{
     fs::OpenOptions,
-    io::{AsyncWriteExt, BufWriter},
+    io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
 };
 
 const MAGIC_NUMBER: u16 = 9972;
 
 type Result<T> = std::result::Result<T, Error>;
+
+pub enum Action {
+    Get = 1,
+    Post,
+}
+
+impl Action {
+    pub async fn decode(stream: &mut BidirectionalStream) -> Result<Self> {
+        match stream.receive().await? {
+            Some(buf) => todo!(),
+            None => Err(Error::StreamClosed),
+        }
+    }
+    pub async fn encode(stream: &mut BidirectionalStream) -> Result<()> {
+        todo!()
+    }
+}
 
 #[derive(Debug)]
 pub enum Error {
@@ -53,45 +70,42 @@ impl From<io::Error> for Error {
     }
 }
 
-struct File {
+pub struct File {
     /// file absolute path
     path: PathBuf,
-    /// is dir
-    is_dir: bool,
     /// permission
     permission: u32,
 }
 
 impl File {
-    pub async fn handle_recv(stream: &mut ReceiveStream) -> Result<()> {
+    pub async fn handle_recv(stream: &mut BidirectionalStream) -> Result<()> {
         let mut buf = stream.receive().await?.ok_or(Error::StreamClosed)?;
         let metadata = Self::decode(&mut buf)?;
 
         // write file
-        let mut writed = 0;
         let file = OpenOptions::new().append(true).open(metadata.path).await?;
         file.set_permissions(Permissions::from_mode(metadata.permission))
             .await?;
-        let mut file = BufWriter::new(file);
+        let mut bw = BufWriter::new(file.try_clone().await?);
         let mut checksum = digest::Context::new(&digest::SHA256);
         while let Some(buf) = stream.receive().await? {
             // add checksum
             checksum.update(&buf);
             // write to file
-            file.write_all(&buf).await?;
-            // total count
-            writed += buf.len();
+            bw.write_all(&buf).await?;
         }
-        file.flush().await?;
+        bw.flush().await?;
+        let checksum = checksum.finish();
         // check total bytes count
+        let writed = file.metadata().await?.len();
         let mut buf = stream.receive().await?.ok_or(Error::Malformed)?;
         assert_len(&buf, 8)?;
-        if writed != buf.get_u64() as usize {
+        if writed != buf.get_u64() {
             return Err(Error::Malformed);
         }
         // checksum verify
         assert_len(&buf, 32)?;
-        if checksum.finish().as_ref() != buf.split_to(32) {
+        if checksum.as_ref() != buf.split_to(32) {
             return Err(Error::Malformed);
         }
         Ok(())
@@ -110,33 +124,57 @@ impl File {
         let path_bytes = buf.split_to(path_len).to_vec();
         let path = PathBuf::from(String::from_utf8(path_bytes)?);
 
-        // is dir
-        assert_len(buf, 1)?;
-        let is_dir = buf.get_u8() == 1;
-
         // permission
         assert_len(buf, 4)?;
         let permission = buf.get_u32();
 
-        Ok(File {
-            path,
-            is_dir,
-            permission,
-        })
+        Ok(File { path, permission })
     }
 
-    pub async fn handle_send(stream: &mut SendStream, path: &Path) -> Result<()> {
+    pub async fn handle_send(stream: &mut BidirectionalStream, path: &Path) -> Result<()> {
         if !path.exists() {
             return Err(Error::Malformed);
         }
+        let mut buf = BytesMut::new();
+        // magic number
+        buf.put_u16(MAGIC_NUMBER);
         // path
-        let path = path.to_path_buf();
-        // is dir
-        let is_dir = path.is_dir();
+        let path = path.canonicalize()?;
+        let path_bytes = path.to_str().ok_or(Error::Malformed)?.as_bytes();
+        buf.put_u16(path_bytes.len() as u16);
+        buf.put_slice(path_bytes);
         // file
         let file = OpenOptions::new().read(true).open(path).await?;
         // permission
-        let permission = file.metadata().await?.permissions().mode();
+        let metadata = file.metadata().await?;
+        let file_size = metadata.len();
+        let permission = metadata.permissions().mode();
+        buf.put_u32(permission);
+
+        // read file
+        const FRAME_SIZE: usize = 1024 * 10;
+        let mut br = BufReader::new(file);
+        let read_buf = [0u8; FRAME_SIZE];
+        let mut checksum = digest::Context::new(&digest::SHA256);
+        loop {
+            let read = br.read(&mut buf).await?;
+            if read == 0 {
+                break;
+            }
+            // send chunk
+            let frame = Bytes::from(read_buf[0..read].to_vec());
+            checksum.update(&frame);
+            stream.send(frame).await?;
+            if read < FRAME_SIZE {
+                break;
+            }
+        }
+        let mut buf = BytesMut::new();
+        // file size
+        buf.put_u64(file_size);
+        // checksum
+        buf.put_slice(checksum.finish().as_ref());
+        stream.send(buf.freeze()).await?;
         Ok(())
     }
 }

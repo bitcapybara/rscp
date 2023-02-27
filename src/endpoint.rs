@@ -10,7 +10,7 @@ use s2n_quic::{
 
 use crate::{
     mtls::MtlsProvider,
-    protocol::{self, Handshake},
+    protocol::{self, Action},
 };
 
 type Result<T> = std::result::Result<T, Error>;
@@ -66,6 +66,12 @@ impl From<stream::Error> for Error {
     }
 }
 
+impl From<protocol::Error> for Error {
+    fn from(value: protocol::Error) -> Self {
+        todo!()
+    }
+}
+
 pub struct Endpoint {
     provider: MtlsProvider,
     addr: SocketAddr,
@@ -85,7 +91,7 @@ impl Endpoint {
         while let Some(conn) = server.accept().await {
             // handle connection from client
             let local = conn.local_addr()?;
-            let fut = Self::handle(conn);
+            let fut = Self::handle_conn(conn);
             tokio::spawn(async move {
                 if let Err(e) = fut.await {
                     error!("handle connection from client error: {e}, client addr: {local}");
@@ -96,22 +102,15 @@ impl Endpoint {
         Ok(())
     }
 
-    async fn handle(mut conn: Connection) -> Result<()> {
+    async fn handle_conn(mut conn: Connection) -> Result<()> {
         // first recv handshake message
-        let mut peer = conn.accept().await?.ok_or(Error::Stopped)?;
-        let handshake = peer.receive().await?.ok_or(Error::MissHandsake)?;
-        match Handshake::decode(handshake) {
-            Ok(hs) => {
-                send_ok(&mut conn).await?;
-                match hs {
-                    Handshake::Recv(path) => todo!(),
-                    Handshake::Send(path) => todo!(),
-                }
-            }
-            Err(e) => {
-                send_err(&mut conn, &format!("ERR: {e}")).await?;
-                error!("handshake decode error: {e}");
-            }
+        let mut stream = conn
+            .accept_bidirectional_stream()
+            .await?
+            .ok_or(Error::Stopped)?;
+        match Action::decode(&mut stream).await? {
+            Action::Get => protocol::File::handle_send(&mut stream, &PathBuf::from("")).await?,
+            Action::Post => protocol::File::handle_recv(&mut stream).await?,
         }
         Ok(())
     }
@@ -132,11 +131,4 @@ impl Endpoint {
         let stream = conn.open_send_stream().await?;
         Ok(())
     }
-}
-async fn send_ok(conn: &mut Connection) -> Result<()> {
-    Ok(())
-}
-
-async fn send_err(conn: &mut Connection, msg: &str) -> Result<()> {
-    Ok(())
 }
