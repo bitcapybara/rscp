@@ -1,6 +1,7 @@
 use std::{fmt::Display, io, net::SocketAddr, path::PathBuf};
 
 use bytes::Bytes;
+use futures::{future, FutureExt};
 use log::error;
 use s2n_quic::{
     client::Connect,
@@ -114,25 +115,31 @@ impl Endpoint {
                 stream.close().await?;
                 match action {
                     Action::Get(path) => {
-                        // TODO send ok/err
-                        // close stream
-                        stream.close().await?;
                         // send files under path to client
-                        let mut stream = conn.open_bidirectional_stream().await?;
                         let paths = list_all_files(path).await?;
+                        let mut futs = Vec::with_capacity(paths.len());
                         for path in paths {
-                            File::handle_send(&mut stream, &path).await?;
+                            // coroutine per file
+                            let stream = conn.open_bidirectional_stream().await?;
+                            let (task, handle) = File::handle_send(stream, path).remote_handle();
+                            tokio::spawn(task);
+                            futs.push(handle);
                         }
+                        // TODO process error
+                        future::join_all(futs).await;
                     }
                     Action::Post(path) => {
-                        // TODO send ok/err
-                        stream.send(Bytes::new()).await?;
                         // recv and save files from client
-                        let mut stream = conn
-                            .accept_bidirectional_stream()
-                            .await?
-                            .ok_or(Error::Stopped)?;
-                        File::handle_recv(&mut stream, &path).await?;
+                        let mut futs = Vec::new();
+                        // coroutine per file
+                        while let Some(stream) = conn.accept_bidirectional_stream().await? {
+                            let (task, handle) =
+                                File::handle_recv(stream, path.clone()).remote_handle();
+                            tokio::spawn(task);
+                            futs.push(handle);
+                        }
+                        // TODO process error
+                        future::join_all(futs).await;
                     }
                 }
             }

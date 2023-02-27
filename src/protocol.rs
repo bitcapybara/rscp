@@ -118,7 +118,7 @@ pub struct File {
 }
 
 impl File {
-    pub async fn handle_recv(stream: &mut BidirectionalStream, path: &Path) -> Result<()> {
+    pub async fn handle_recv(mut stream: BidirectionalStream, path: PathBuf) -> Result<()> {
         let mut buf = stream.receive().await?.ok_or(Error::StreamClosed)?;
         let metadata = Self::decode(&mut buf)?;
 
@@ -176,7 +176,7 @@ impl File {
         })
     }
 
-    pub async fn handle_send(stream: &mut BidirectionalStream, path: &Path) -> Result<()> {
+    pub async fn handle_send(mut stream: BidirectionalStream, path: PathBuf) -> Result<()> {
         if !path.exists() {
             return Err(Error::Malformed);
         }
