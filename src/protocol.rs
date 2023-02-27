@@ -9,7 +9,7 @@ use std::{
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use ring::digest;
-use s2n_quic::stream::{self, BidirectionalStream};
+use s2n_quic::stream::{self, BidirectionalStream, PeerStream};
 use tokio::{
     fs::OpenOptions,
     io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
@@ -19,47 +19,13 @@ const MAGIC_NUMBER: u16 = 9972;
 
 type Result<T> = std::result::Result<T, Error>;
 
-pub enum Action {
-    Get = 1,
-    Post,
-}
-
-impl Action {
-    pub async fn decode(stream: &mut BidirectionalStream) -> Result<Self> {
-        match stream.receive().await? {
-            Some(mut buf) => {
-                // magic number
-                assert_len(&buf, 2)?;
-                if buf.get_u16() != MAGIC_NUMBER {
-                    // TODO send error message
-                    return Err(Error::MissMagicNumber);
-                }
-                // action
-                assert_len(&buf, 1)?;
-                match buf.get_u8() {
-                    0x01 => Ok(Self::Get),
-                    0x02 => Ok(Self::Post),
-                    _ => Err(Error::Malformed),
-                }
-            }
-            None => Err(Error::StreamClosed),
-        }
-    }
-    pub async fn encode(self, stream: &mut BidirectionalStream) -> Result<()> {
-        let mut buf = BytesMut::with_capacity(3);
-        buf.put_u16(MAGIC_NUMBER);
-        buf.put_u8(self as u8);
-        stream.send(buf.freeze()).await?;
-        Ok(())
-    }
-}
-
 #[derive(Debug)]
 pub enum Error {
     MissMagicNumber,
     UnknownHandshake,
     Malformed,
     StreamClosed,
+    PathInvalid,
 }
 
 impl std::error::Error for Error {}
@@ -85,6 +51,60 @@ impl From<FromUtf8Error> for Error {
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
         todo!()
+    }
+}
+
+/// request from client
+pub enum Action {
+    /// path must exists
+    Get(PathBuf),
+    Post(PathBuf),
+}
+
+impl Action {
+    pub async fn decode(stream: &mut PeerStream) -> Result<Self> {
+        match stream.receive().await? {
+            Some(mut buf) => {
+                // magic number
+                assert_len(&buf, 2)?;
+                if buf.get_u16() != MAGIC_NUMBER {
+                    // TODO send error message
+                    return Err(Error::MissMagicNumber);
+                }
+                // action
+                assert_len(&buf, 1)?;
+                match buf.get_u8() {
+                    0x01 => {
+                        // check path exists
+                        let path = Self::decode_path(&mut buf).await?;
+                        if !path.exists() {
+                            return Err(Error::PathInvalid);
+                        }
+                        Ok(Self::Get(path))
+                    }
+                    0x02 => Ok(Self::Post(Self::decode_path(&mut buf).await?)),
+                    _ => Err(Error::Malformed),
+                }
+            }
+            None => Err(Error::StreamClosed),
+        }
+    }
+    async fn decode_path(buf: &mut Bytes) -> Result<PathBuf> {
+        assert_len(buf, 2)?;
+        let path_len = buf.get_u16() as usize;
+        let path_bytes = buf.split_to(path_len);
+        Ok(PathBuf::from(String::from_utf8(path_bytes.to_vec())?))
+    }
+    pub async fn encode(self, stream: &mut BidirectionalStream) -> Result<()> {
+        let mut buf = BytesMut::with_capacity(3);
+        buf.put_u16(MAGIC_NUMBER);
+        let n = match self {
+            Action::Get(_) => 0x01,
+            Action::Post(_) => 0x02,
+        };
+        buf.put_u8(n);
+        stream.send(buf.freeze()).await?;
+        Ok(())
     }
 }
 

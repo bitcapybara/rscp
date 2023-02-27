@@ -1,4 +1,9 @@
-use std::{fmt::Display, io, net::SocketAddr, path::PathBuf};
+use std::{
+    fmt::Display,
+    io,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
 use log::error;
 use s2n_quic::{
@@ -104,13 +109,16 @@ impl Endpoint {
 
     async fn handle_conn(mut conn: Connection) -> Result<()> {
         // first recv handshake message
-        let mut stream = conn
-            .accept_bidirectional_stream()
-            .await?
-            .ok_or(Error::Stopped)?;
+        let mut stream = conn.accept().await?.ok_or(Error::Stopped)?;
         match Action::decode(&mut stream).await? {
-            Action::Get => protocol::File::handle_send(&mut stream, &PathBuf::from("")).await?,
-            Action::Post => protocol::File::handle_recv(&mut stream).await?,
+            Action::Get => {
+                // send files under path to client
+                todo!()
+            }
+            Action::Post => {
+                // recv and save files from client
+                todo!()
+            }
         }
         Ok(())
     }
@@ -131,4 +139,33 @@ impl Endpoint {
         let stream = conn.open_send_stream().await?;
         Ok(())
     }
+}
+
+// list all files/emptydir under path
+async fn list_all_files(path: PathBuf) -> Result<Vec<PathBuf>> {
+    if !path.exists() {
+        return Err(io::Error::from(io::ErrorKind::NotFound))?;
+    }
+    let mut entries = vec![path];
+    let mut res = Vec::new();
+    while let Some(entry) = entries.pop() {
+        // return file
+        if entry.is_file() {
+            res.push(entry);
+            continue;
+        }
+
+        let mut read_dir = entry.read_dir()?.peekable();
+        // return empty dir
+        if read_dir.peek().is_none() {
+            res.push(entry);
+            continue;
+        }
+        // dir content
+        for child in read_dir {
+            let child = child?.path();
+            entries.push(child);
+        }
+    }
+    Ok(res)
 }
