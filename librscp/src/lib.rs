@@ -1,5 +1,5 @@
 #![allow(dead_code)]
 
 pub mod endpoint;
-mod mtls;
+pub mod mtls;
 mod protocol;

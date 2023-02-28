@@ -1,0 +1,13 @@
+[package]
+name = "librscp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytes = "1.4.0"
+futures = "0.3.26"
+log = "0.4.17"
+ring = "0.16.20"
+rustls-pemfile = "1.0.2"
+s2n-quic = { version = "1.16.0", features = ["provider-address-token-default", "provider-tls-rustls"] }
+tokio = { version = "1.25.0", features = ["rt", "rt-multi-thread", "macros", "fs", "io-util"] }

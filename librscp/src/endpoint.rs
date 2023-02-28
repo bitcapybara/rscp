@@ -82,8 +82,8 @@ pub enum Action {
 }
 
 pub struct PathTuple {
-    local: PathBuf,
-    remote: PathBuf,
+    pub local: PathBuf,
+    pub remote: PathBuf,
 }
 
 pub struct Endpoint {
