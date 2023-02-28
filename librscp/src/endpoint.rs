@@ -1,6 +1,5 @@
 use std::{fmt::Display, io, net::SocketAddr, path::PathBuf};
 
-use bytes::Bytes;
 use futures::{future, FutureExt};
 use log::error;
 use s2n_quic::{
@@ -122,45 +121,37 @@ impl Endpoint {
             .accept_bidirectional_stream()
             .await?
             .ok_or(Error::Stopped)?;
-        match Method::decode(&mut stream).await {
-            Ok(action) => {
-                // TODO send ok
-                stream.send(Bytes::new()).await?;
-                // close stream
-                stream.close().await?;
-                match action {
-                    Method::Get(path) => {
-                        // send files under path to client
-                        let paths = list_all_files(path).await?;
-                        let mut futs = Vec::with_capacity(paths.len());
-                        for path in paths {
-                            // coroutine per file
-                            let stream = conn.open_bidirectional_stream().await?;
-                            let (task, handle) = File::handle_send(stream, path).remote_handle();
-                            tokio::spawn(task);
-                            futs.push(handle);
-                        }
-                        // TODO process error
-                        future::join_all(futs).await;
-                    }
-                    Method::Post(path) => {
-                        // recv and save files from client
-                        let mut futs = Vec::new();
+        match Method::recv(&mut stream).await {
+            Ok(action) => match action {
+                Method::Get(path) => {
+                    // send files under path to client
+                    let paths = list_all_files(path).await?;
+                    let mut futs = Vec::with_capacity(paths.len());
+                    for path in paths {
                         // coroutine per file
-                        while let Some(stream) = conn.accept_bidirectional_stream().await? {
-                            let (task, handle) =
-                                File::handle_recv(stream, path.clone()).remote_handle();
-                            tokio::spawn(task);
-                            futs.push(handle);
-                        }
-                        // TODO process error
-                        future::join_all(futs).await;
+                        let stream = conn.open_bidirectional_stream().await?;
+                        let (task, handle) = File::handle_send(stream, path).remote_handle();
+                        tokio::spawn(task);
+                        futs.push(handle);
                     }
+                    // TODO process error
+                    future::join_all(futs).await;
                 }
-            }
+                Method::Post(path) => {
+                    // recv and save files from client
+                    let mut futs = Vec::new();
+                    // coroutine per file
+                    while let Some(stream) = conn.accept_bidirectional_stream().await? {
+                        let (task, handle) =
+                            File::handle_recv(stream, path.clone()).remote_handle();
+                        tokio::spawn(task);
+                        futs.push(handle);
+                    }
+                    // TODO process error
+                    future::join_all(futs).await;
+                }
+            },
             Err(e) => {
-                // TODO send err
-
                 error!("decode action error: {e}")
             }
         }
@@ -180,9 +171,7 @@ impl Endpoint {
         match action {
             Action::Get(PathTuple { local, remote }) => {
                 // send get message
-                protocol::Method::Get(remote).encode(&mut stream).await?;
-                // TODO recv ok/err
-                let _ = stream.receive().await?.ok_or(Error::Stopped)?;
+                Method::Get(remote).send(&mut stream).await?;
                 // recv files
                 let mut futs = Vec::new();
                 while let Some(stream) = conn.accept_bidirectional_stream().await? {
@@ -195,9 +184,7 @@ impl Endpoint {
             }
             Action::Post(PathTuple { local, remote }) => {
                 // send post message
-                protocol::Method::Post(remote).encode(&mut stream).await?;
-                // TODO recv ok/err
-                let _ = stream.receive().await?.ok_or(Error::Stopped)?;
+                Method::Post(remote).send(&mut stream).await?;
                 // send files
                 let paths = list_all_files(local).await?;
                 let mut futs = Vec::with_capacity(paths.len());

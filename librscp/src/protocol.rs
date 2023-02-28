@@ -1,15 +1,11 @@
 use std::{
-    fmt::Display,
-    fs::Permissions,
-    io,
-    os::unix::prelude::PermissionsExt,
-    path::{Path, PathBuf},
+    fmt::Display, fs::Permissions, io, os::unix::prelude::PermissionsExt, path::PathBuf,
     string::FromUtf8Error,
 };
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use ring::digest;
-use s2n_quic::stream::{self, BidirectionalStream, PeerStream};
+use s2n_quic::stream::{self, BidirectionalStream};
 use tokio::{
     fs::OpenOptions,
     io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
@@ -26,6 +22,7 @@ pub enum Error {
     Malformed,
     StreamClosed,
     PathInvalid,
+    FromServer(String),
 }
 
 impl std::error::Error for Error {}
@@ -63,7 +60,24 @@ pub enum Method {
 }
 
 impl Method {
-    pub async fn decode(stream: &mut BidirectionalStream) -> Result<Self> {
+    pub async fn recv(stream: &mut BidirectionalStream) -> Result<Self> {
+        match Self::decode(stream).await {
+            Ok(method) => {
+                stream.send(Bytes::from_static(&[0u8])).await?;
+                Ok(method)
+            }
+            Err(e) => {
+                let mut buf = BytesMut::new();
+                buf.put_u8(1);
+                let msg = e.to_string();
+                buf.put_u16(msg.len() as u16);
+                buf.put_slice(msg.as_bytes());
+                stream.send(buf.freeze()).await?;
+                Err(e)
+            }
+        }
+    }
+    async fn decode(stream: &mut BidirectionalStream) -> Result<Self> {
         match stream.receive().await? {
             Some(mut buf) => {
                 // magic number
@@ -96,7 +110,9 @@ impl Method {
         let path_bytes = buf.split_to(path_len);
         Ok(PathBuf::from(String::from_utf8(path_bytes.to_vec())?))
     }
-    pub async fn encode(self, stream: &mut BidirectionalStream) -> Result<()> {
+
+    pub async fn send(self, stream: &mut BidirectionalStream) -> Result<()> {
+        // send method
         let mut buf = BytesMut::with_capacity(3);
         buf.put_u16(MAGIC_NUMBER);
         let n = match self {
@@ -105,6 +121,16 @@ impl Method {
         };
         buf.put_u8(n);
         stream.send(buf.freeze()).await?;
+
+        // wait for resp
+        let mut buf = stream.receive().await?.ok_or(Error::StreamClosed)?;
+        assert_len(&buf, 1)?;
+        if buf.get_u8() != 0 {
+            assert_len(&buf, 2)?;
+            let msg_len = buf.get_u16() as usize;
+            let msg_bytes = buf.split_to(msg_len);
+            return Err(Error::FromServer(String::from_utf8(msg_bytes.to_vec())?));
+        }
         Ok(())
     }
 }

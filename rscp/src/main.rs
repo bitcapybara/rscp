@@ -12,13 +12,13 @@ use log::info;
 #[derive(Debug, Parser)]
 pub struct Opt {
     /// log level
-    #[arg(long = "log_level", required = false, env = "RSCP_LOG_LEVEL")]
+    #[arg(long = "log_level", default_value = "info", env = "RSCP_LOG_LEVEL")]
     log_level: String,
     /// Start as a server
     #[arg(short = 's')]
     server: bool,
     /// Serve port (for server) or remote port (for client)
-    #[arg(short = 'p', env = "RSCP_PORT")]
+    #[arg(short = 'p', default_value = "3322", env = "RSCP_PORT")]
     port: u16,
     /// Directory include ca pem files   
     #[arg(short = 'c', env = "RSCP_CA_DIR")]
@@ -32,6 +32,7 @@ pub struct Opt {
 }
 
 fn main() -> anyhow::Result<()> {
+    // cli command args
     let opts = Opt::parse();
     // log init
     Logger::try_with_str(opts.log_level)?
@@ -87,6 +88,9 @@ fn main() -> anyhow::Result<()> {
 }
 
 #[tokio::main]
-async fn run(fut: impl Future<Output = Result<(), Error>>) -> anyhow::Result<()> {
+async fn run<F>(fut: F) -> anyhow::Result<()>
+where
+    F: Future<Output = Result<(), Error>>,
+{
     Ok(fut.await?)
 }
