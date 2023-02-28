@@ -12,6 +12,7 @@ use tokio::{
 };
 
 const MAGIC_NUMBER: u16 = 9972;
+const FRAME_SIZE: usize = 1024 * 1024;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -224,7 +225,6 @@ impl File {
         buf.put_u32(permission);
 
         // read file
-        const FRAME_SIZE: usize = 1024 * 10;
         let mut br = BufReader::new(file);
         let read_buf = [0u8; FRAME_SIZE];
         let mut checksum = digest::Context::new(&digest::SHA256);
