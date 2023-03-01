@@ -41,22 +41,19 @@ fn main() -> anyhow::Result<()> {
     info!("logger init done");
     // ca
     let ca_path = &opts.ca_path;
-    let (ca, cert, key) = if opts.server {
-        (
-            fs::read(ca_path.join("ca.pem"))?,
-            fs::read(ca_path.join("server.pem"))?,
-            fs::read(ca_path.join("server-key.pem"))?,
-        )
+    let (ca_file, cert_file, key_file) = if opts.server {
+        ("ca.pem", "server.pem", "server-key.pem")
     } else {
-        (
-            fs::read(ca_path.join("ca.pem"))?,
-            fs::read(ca_path.join("client.pem"))?,
-            fs::read(ca_path.join("client-key.pem"))?,
-        )
+        ("ca.pem", "client.pem", "client-key.pem")
     };
+    let (ca, cert, key) = (
+        fs::read(ca_path.join(ca_file))?,
+        fs::read(ca_path.join(cert_file))?,
+        fs::read(ca_path.join(key_file))?,
+    );
+    let provider = MtlsProvider::new(&ca, &cert, &key)?;
 
     // build endpoint
-    let provider = MtlsProvider::new(&ca, &cert, &key)?;
     if opts.server {
         let addr = SocketAddr::new("0.0.0.0".parse()?, opts.port);
         info!("server start at {}", opts.port);

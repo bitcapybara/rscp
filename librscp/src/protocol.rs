@@ -7,7 +7,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use ring::digest;
 use s2n_quic::stream::{self, BidirectionalStream};
 use tokio::{
-    fs::OpenOptions,
+    fs::{self, OpenOptions},
     io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
 };
 
@@ -78,6 +78,7 @@ impl Method {
             }
         }
     }
+
     async fn decode(stream: &mut BidirectionalStream) -> Result<Self> {
         match stream.receive().await? {
             Some(mut buf) => {
@@ -105,6 +106,7 @@ impl Method {
             None => Err(Error::StreamClosed),
         }
     }
+
     async fn decode_path(buf: &mut Bytes) -> Result<PathBuf> {
         assert_len(buf, 2)?;
         let path_len = buf.get_u16() as usize;
@@ -149,6 +151,10 @@ impl File {
     pub async fn handle_recv(mut stream: BidirectionalStream, path: PathBuf) -> Result<()> {
         let mut buf = stream.receive().await?.ok_or(Error::StreamClosed)?;
         let metadata = Self::decode(&mut buf)?;
+        if metadata.is_dir {
+            fs::create_dir_all(path.join(metadata.path)).await?;
+            return Ok(());
+        }
 
         // write file
         let file = OpenOptions::new()
@@ -210,12 +216,16 @@ impl File {
         }
         let mut buf = BytesMut::new();
         // path
-        let path = path.canonicalize()?;
+        let path = fs::canonicalize(path).await?;
         let path_bytes = path.to_str().ok_or(Error::Malformed)?.as_bytes();
         buf.put_u16(path_bytes.len() as u16);
         buf.put_slice(path_bytes);
         // is dir
-        buf.put_u8(path.is_dir() as u8);
+        let is_dir = fs::metadata(&path).await?.is_dir();
+        buf.put_u8(is_dir as u8);
+        if is_dir {
+            return Ok(());
+        }
         // file
         let file = OpenOptions::new().read(true).open(path).await?;
         // permission
