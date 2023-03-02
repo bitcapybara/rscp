@@ -1,12 +1,12 @@
 use std::{fmt::Display, io, net::SocketAddr, path::PathBuf};
 
-use futures::{future, FutureExt};
+use futures::FutureExt;
 use log::error;
 use s2n_quic::{
     client::Connect,
     connection,
     provider::{self, tls::rustls::rustls},
-    stream, Connection,
+    Connection,
 };
 
 use crate::{
@@ -18,34 +18,50 @@ type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub enum Error {
-    Io(String),
-    Stopped,
-    MissHandsake,
+    /// io error
+    Io(io::Error),
+    /// QUIC connection closed
+    ConnClosed,
+    /// TLS error
+    Tls(rustls::Error),
+    /// start up error
+    StartUp(String),
+    /// QUIC connection error
+    Connection(connection::Error),
+    /// protocol codec error
+    Protocol(protocol::Error),
 }
 
 impl std::error::Error for Error {}
 
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        match self {
+            Error::Io(e) => write!(f, "I/O error: {e}"),
+            Error::ConnClosed => write!(f, "QUIC connection already closed"),
+            Error::Tls(e) => write!(f, "TLS auth error: {e}"),
+            Error::StartUp(s) => write!(f, "Endpoint start up error: {s}"),
+            Error::Connection(e) => write!(f, "QUIC connection error: {e}"),
+            Error::Protocol(e) => write!(f, "Protocol parse error: {e}"),
+        }
     }
 }
 
 impl From<io::Error> for Error {
-    fn from(value: io::Error) -> Self {
-        todo!()
+    fn from(e: io::Error) -> Self {
+        Error::Io(e)
     }
 }
 
 impl From<rustls::Error> for Error {
-    fn from(value: rustls::Error) -> Self {
-        todo!()
+    fn from(e: rustls::Error) -> Self {
+        Error::Tls(e)
     }
 }
 
 impl From<provider::StartError> for Error {
-    fn from(value: provider::StartError) -> Self {
-        todo!()
+    fn from(e: provider::StartError) -> Self {
+        Error::StartUp(e.to_string())
     }
 }
 
@@ -56,20 +72,14 @@ impl From<std::convert::Infallible> for Error {
 }
 
 impl From<connection::Error> for Error {
-    fn from(value: connection::Error) -> Self {
-        todo!()
-    }
-}
-
-impl From<stream::Error> for Error {
-    fn from(value: stream::Error) -> Self {
-        todo!()
+    fn from(e: connection::Error) -> Self {
+        Error::Connection(e)
     }
 }
 
 impl From<protocol::Error> for Error {
-    fn from(value: protocol::Error) -> Self {
-        todo!()
+    fn from(e: protocol::Error) -> Self {
+        Error::Protocol(e)
     }
 }
 
@@ -120,36 +130,11 @@ impl Endpoint {
         let mut stream = conn
             .accept_bidirectional_stream()
             .await?
-            .ok_or(Error::Stopped)?;
+            .ok_or(Error::ConnClosed)?;
         match Method::recv(&mut stream).await {
             Ok(action) => match action {
-                Method::Get(path) => {
-                    // send files under path to client
-                    let paths = list_all_files(path).await?;
-                    let mut futs = Vec::with_capacity(paths.len());
-                    for path in paths {
-                        // coroutine per file
-                        let stream = conn.open_bidirectional_stream().await?;
-                        let (task, handle) = File::handle_send(stream, path).remote_handle();
-                        tokio::spawn(task);
-                        futs.push(handle);
-                    }
-                    // TODO process error
-                    future::join_all(futs).await;
-                }
-                Method::Post(path) => {
-                    // recv and save files from client
-                    let mut futs = Vec::new();
-                    // coroutine per file
-                    while let Some(stream) = conn.accept_bidirectional_stream().await? {
-                        let (task, handle) =
-                            File::handle_recv(stream, path.clone()).remote_handle();
-                        tokio::spawn(task);
-                        futs.push(handle);
-                    }
-                    // TODO process error
-                    future::join_all(futs).await;
-                }
+                Method::Get(path) => handle_send_file(&mut conn, path).await?,
+                Method::Post(path) => handle_recv_file(&mut conn, path).await?,
             },
             Err(e) => {
                 error!("decode action error: {e}")
@@ -173,33 +158,52 @@ impl Endpoint {
                 // send get message
                 Method::Get(remote).send(&mut stream).await?;
                 // recv files
-                let mut futs = Vec::new();
-                while let Some(stream) = conn.accept_bidirectional_stream().await? {
-                    let (task, handle) = File::handle_recv(stream, local.clone()).remote_handle();
-                    tokio::spawn(task);
-                    futs.push(handle);
-                }
-                // TODO process error
-                future::join_all(futs).await;
+                handle_recv_file(&mut conn, local.clone()).await?;
             }
             Action::Post(PathTuple { local, remote }) => {
                 // send post message
                 Method::Post(remote).send(&mut stream).await?;
                 // send files
-                let paths = list_all_files(local).await?;
-                let mut futs = Vec::with_capacity(paths.len());
-                for path in paths {
-                    let stream = conn.open_bidirectional_stream().await?;
-                    let (task, handle) = File::handle_send(stream, path).remote_handle();
-                    tokio::spawn(task);
-                    futs.push(handle);
-                }
-                // TODO process error
-                future::join_all(futs).await;
+                handle_send_file(&mut conn, local).await?;
             }
         }
         Ok(())
     }
+}
+
+async fn handle_recv_file(conn: &mut Connection, path: PathBuf) -> Result<()> {
+    // recv files
+    let mut futs = Vec::new();
+    while let Some(stream) = conn.accept_bidirectional_stream().await? {
+        let (task, handle) = File::handle_recv(stream, path.clone()).remote_handle();
+        tokio::spawn(task);
+        futs.push((path.clone(), handle));
+    }
+    for (path, fut) in futs {
+        if let Err(e) = fut.await {
+            error!("Get {} error: {e}", path.display())
+        }
+    }
+    Ok(())
+}
+
+async fn handle_send_file(conn: &mut Connection, path: PathBuf) -> Result<()> {
+    // send files under path to client
+    let paths = list_all_files(path).await?;
+    let mut futs = Vec::with_capacity(paths.len());
+    for path in paths {
+        // coroutine per file
+        let stream = conn.open_bidirectional_stream().await?;
+        let (task, handle) = File::handle_send(stream, path.clone()).remote_handle();
+        tokio::spawn(task);
+        futs.push((path, handle));
+    }
+    for (path, fut) in futs {
+        if let Err(e) = fut.await {
+            error!("Get {} error: {e}", path.display())
+        }
+    }
+    Ok(())
 }
 
 // list all files/emptydir under path
