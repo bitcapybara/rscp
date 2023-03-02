@@ -18,11 +18,21 @@ type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub enum Error {
+    /// error from quic stream
+    Stream(stream::Error),
+    /// utf-8 malformed
+    Utf8,
+    /// io
+    Io(io::Error),
+    /// magic number
     MissMagicNumber,
-    UnknownHandshake,
-    Malformed,
+    /// unrecognized bytes seq
+    BytesMalformed,
+    /// stream recv None
     StreamClosed,
-    PathInvalid,
+    /// path not exists
+    PathNotExists(PathBuf),
+    /// recv error from server
     FromServer(String),
 }
 
@@ -30,25 +40,34 @@ impl std::error::Error for Error {}
 
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        match self {
+            Error::Stream(e) => write!(f, "QUIC stream error: {e}"),
+            Error::Utf8 => write!(f, "Invalid UTF-8 string"),
+            Error::Io(e) => write!(f, "I/O error: {e}"),
+            Error::MissMagicNumber => write!(f, "Magic number not invalid"),
+            Error::BytesMalformed => write!(f, "Stream bytes Malformed"),
+            Error::StreamClosed => write!(f, "QUIC stream already closed"),
+            Error::PathNotExists(p) => write!(f, "Path not exists: {}", p.display()),
+            Error::FromServer(s) => write!(f, "Receive error from server: {s}"),
+        }
     }
 }
 
 impl From<stream::Error> for Error {
-    fn from(value: stream::Error) -> Self {
-        todo!()
+    fn from(e: stream::Error) -> Self {
+        Error::Stream(e)
     }
 }
 
 impl From<FromUtf8Error> for Error {
-    fn from(value: FromUtf8Error) -> Self {
-        todo!()
+    fn from(_: FromUtf8Error) -> Self {
+        Error::Utf8
     }
 }
 
 impl From<io::Error> for Error {
-    fn from(value: io::Error) -> Self {
-        todo!()
+    fn from(e: io::Error) -> Self {
+        Error::Io(e)
     }
 }
 
@@ -85,7 +104,6 @@ impl Method {
                 // magic number
                 assert_len(&buf, 2)?;
                 if buf.get_u16() != MAGIC_NUMBER {
-                    // TODO send error message
                     return Err(Error::MissMagicNumber);
                 }
                 // action
@@ -95,12 +113,12 @@ impl Method {
                         // check path exists
                         let path = Self::decode_path(&mut buf).await?;
                         if !path.exists() {
-                            return Err(Error::PathInvalid);
+                            return Err(Error::PathNotExists(path));
                         }
                         Ok(Self::Get(path))
                     }
                     0x02 => Ok(Self::Post(Self::decode_path(&mut buf).await?)),
-                    _ => Err(Error::Malformed),
+                    _ => Err(Error::BytesMalformed),
                 }
             }
             None => Err(Error::StreamClosed),
@@ -175,15 +193,15 @@ impl File {
         let checksum = checksum.finish();
         // check total bytes count
         let writed = file.metadata().await?.len();
-        let mut buf = stream.receive().await?.ok_or(Error::Malformed)?;
+        let mut buf = stream.receive().await?.ok_or(Error::BytesMalformed)?;
         assert_len(&buf, 8)?;
         if writed != buf.get_u64() {
-            return Err(Error::Malformed);
+            return Err(Error::BytesMalformed);
         }
         // checksum verify
         assert_len(&buf, 32)?;
         if checksum.as_ref() != buf.split_to(32) {
-            return Err(Error::Malformed);
+            return Err(Error::BytesMalformed);
         }
         Ok(())
     }
@@ -212,12 +230,12 @@ impl File {
 
     pub async fn handle_send(mut stream: BidirectionalStream, path: PathBuf) -> Result<()> {
         if !path.exists() {
-            return Err(Error::Malformed);
+            return Err(Error::BytesMalformed);
         }
         let mut buf = BytesMut::new();
         // path
         let path = fs::canonicalize(path).await?;
-        let path_bytes = path.to_str().ok_or(Error::Malformed)?.as_bytes();
+        let path_bytes = path.to_str().ok_or(Error::BytesMalformed)?.as_bytes();
         buf.put_u16(path_bytes.len() as u16);
         buf.put_slice(path_bytes);
         // is dir
@@ -263,7 +281,7 @@ impl File {
 
 fn assert_len(buf: &Bytes, len: usize) -> Result<()> {
     if buf.len() < len {
-        return Err(Error::Malformed);
+        return Err(Error::BytesMalformed);
     }
     Ok(())
 }
