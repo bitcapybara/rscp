@@ -185,6 +185,7 @@ impl File {
         // write file
         let file = OpenOptions::new()
             .append(true)
+            .create(true)
             .open(path.join(metadata.path))
             .await?;
         file.set_permissions(Permissions::from_mode(metadata.permission))
@@ -242,7 +243,6 @@ impl File {
         }
         let mut buf = BytesMut::new();
         // path
-        let path = fs::canonicalize(path).await?;
         let path_bytes = path.to_str().ok_or(Error::BytesMalformed)?.as_bytes();
         buf.put_u16(path_bytes.len() as u16);
         buf.put_slice(path_bytes);
@@ -262,7 +262,7 @@ impl File {
 
         // read file
         let mut br = BufReader::new(file);
-        let read_buf = [0u8; FRAME_SIZE];
+        let read_buf = Box::new([0u8; FRAME_SIZE]);
         let mut checksum = digest::Context::new(&digest::SHA256);
         loop {
             let read = br.read(&mut buf).await?;

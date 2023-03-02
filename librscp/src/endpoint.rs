@@ -8,6 +8,7 @@ use s2n_quic::{
     provider::{self, tls::rustls::rustls},
     Connection,
 };
+use tokio::fs;
 
 use crate::{
     mtls::MtlsProvider,
@@ -137,7 +138,7 @@ impl Endpoint {
                 Method::Post(path) => handle_recv_file(&mut conn, path).await?,
             },
             Err(e) => {
-                error!("decode action error: {e}")
+                error!("Decode Method error: {e}")
             }
         }
         Ok(())
@@ -174,7 +175,7 @@ impl Endpoint {
 async fn handle_recv_file(conn: &mut Connection, path: PathBuf) -> Result<()> {
     // recv files
     let mut futs = Vec::new();
-    while let Some(stream) = conn.accept_bidirectional_stream().await? {
+    while let Ok(Some(stream)) = conn.accept_bidirectional_stream().await {
         let (task, handle) = File::handle_recv(stream, path.clone()).remote_handle();
         tokio::spawn(task);
         futs.push((path.clone(), handle));
@@ -200,7 +201,7 @@ async fn handle_send_file(conn: &mut Connection, path: PathBuf) -> Result<()> {
     }
     for (path, fut) in futs {
         if let Err(e) = fut.await {
-            error!("Get {} error: {e}", path.display())
+            error!("Post {} error: {e}", path.display())
         }
     }
     Ok(())
@@ -208,6 +209,7 @@ async fn handle_send_file(conn: &mut Connection, path: PathBuf) -> Result<()> {
 
 // list all files/emptydir under path
 async fn list_all_files(path: PathBuf) -> Result<Vec<PathBuf>> {
+    let path = fs::canonicalize(path).await?;
     if !path.exists() {
         return Err(io::Error::from(io::ErrorKind::NotFound))?;
     }
