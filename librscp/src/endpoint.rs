@@ -128,11 +128,11 @@ impl Endpoint {
 
     async fn handle_conn(mut conn: Connection) -> Result<()> {
         // first recv handshake message
-        let mut stream = conn
+        let stream = conn
             .accept_bidirectional_stream()
             .await?
             .ok_or(Error::ConnClosed)?;
-        match Method::recv(&mut stream).await {
+        match Method::recv(stream).await {
             Ok(action) => match action {
                 Method::Get(path) => handle_send_file(&mut conn, path).await?,
                 Method::Post(path) => handle_recv_file(&mut conn, path).await?,
@@ -153,17 +153,17 @@ impl Endpoint {
         let connect = Connect::new(self.addr).with_server_name("localhost");
         let mut conn = client.connect(connect).await?;
         // send method to server
-        let mut stream = conn.open_bidirectional_stream().await?;
+        let stream = conn.open_bidirectional_stream().await?;
         match action {
             Action::Get(PathTuple { local, remote }) => {
                 // send get message
-                Method::Get(remote).send(&mut stream).await?;
+                Method::Get(remote).send(stream).await?;
                 // recv files
                 handle_recv_file(&mut conn, local.clone()).await?;
             }
             Action::Post(PathTuple { local, remote }) => {
                 // send post message
-                Method::Post(remote).send(&mut stream).await?;
+                Method::Post(remote).send(stream).await?;
                 // send files
                 handle_send_file(&mut conn, local).await?;
             }

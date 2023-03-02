@@ -1,6 +1,6 @@
 use std::{
     fmt::Display, fs::Permissions, io, os::unix::prelude::PermissionsExt, path::PathBuf,
-    string::FromUtf8Error,
+    string::FromUtf8Error, ops::DerefMut,
 };
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -27,13 +27,13 @@ pub enum Error {
     /// magic number
     MissMagicNumber,
     /// unrecognized bytes seq
-    BytesMalformed,
+    BytesMalformed(String),
     /// stream recv None
     StreamClosed,
     /// path not exists
     PathNotExists(PathBuf),
     /// recv error from server
-    FromServer(String),
+    FromPeer(String),
 }
 
 impl std::error::Error for Error {}
@@ -45,10 +45,10 @@ impl Display for Error {
             Error::Utf8 => write!(f, "Invalid UTF-8 string"),
             Error::Io(e) => write!(f, "I/O error: {e}"),
             Error::MissMagicNumber => write!(f, "Magic number not invalid"),
-            Error::BytesMalformed => write!(f, "Stream bytes Malformed"),
+            Error::BytesMalformed(s) => write!(f, "Stream bytes Malformed: {s}"),
             Error::StreamClosed => write!(f, "QUIC stream already closed"),
             Error::PathNotExists(p) => write!(f, "Path not exists: {}", p.display()),
-            Error::FromServer(s) => write!(f, "Receive error from server: {s}"),
+            Error::FromPeer(s) => write!(f, "Receive error from server: {s}"),
         }
     }
 }
@@ -71,6 +71,17 @@ impl From<io::Error> for Error {
     }
 }
 
+pub struct ProtocolStream {
+    reader: BufReader<BidirectionalStream>,
+    writer: BufWriter<BidirectionalStream>
+}
+
+impl<BufReader<BidirectionalStream>> DerefMut<BufReader> for ProtocolStream {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.reader
+    }
+}
+
 /// request from client
 pub enum Method {
     /// path in server
@@ -80,10 +91,11 @@ pub enum Method {
 }
 
 impl Method {
-    pub async fn recv(stream: &mut BidirectionalStream) -> Result<Self> {
-        match Self::decode(stream).await {
+    pub async fn recv(stream: BidirectionalStream) -> Result<Self> {
+        let mut stream = BufReader::new(stream);
+        match Self::decode(&mut stream).await {
             Ok(method) => {
-                stream.send(Bytes::from_static(&[0u8])).await?;
+                stream.write_all(&[0u8]).await?;
                 Ok(method)
             }
             Err(e) => {
@@ -92,47 +104,40 @@ impl Method {
                 let msg = e.to_string();
                 buf.put_u16(msg.len() as u16);
                 buf.put_slice(msg.as_bytes());
-                stream.send(buf.freeze()).await?;
+                stream.write_buf(&mut buf.freeze()).await?;
                 Err(e)
             }
         }
     }
 
-    async fn decode(stream: &mut BidirectionalStream) -> Result<Self> {
-        match stream.receive().await? {
-            Some(mut buf) => {
+    async fn decode(buf: &mut BufReader<BidirectionalStream>) -> Result<Self> {
                 // magic number
-                assert_len(&buf, 2)?;
-                if buf.get_u16() != MAGIC_NUMBER {
+                if buf.read_u16().await? != MAGIC_NUMBER {
                     return Err(Error::MissMagicNumber);
                 }
                 // action
-                assert_len(&buf, 1)?;
-                match buf.get_u8() {
+                match buf.read_u8().await? {
                     0x01 => {
                         // check path exists
-                        let path = Self::decode_path(&mut buf).await?;
+                        let path = Self::decode_path(buf).await?;
                         if !path.exists() {
                             return Err(Error::PathNotExists(path));
                         }
                         Ok(Self::Get(path))
                     }
-                    0x02 => Ok(Self::Post(Self::decode_path(&mut buf).await?)),
-                    _ => Err(Error::BytesMalformed),
+                    0x02 => Ok(Self::Post(Self::decode_path(buf).await?)),
+                    n => Err(Error::BytesMalformed(format!("Unknown Method: {n}"))),
                 }
-            }
-            None => Err(Error::StreamClosed),
-        }
     }
 
-    async fn decode_path(buf: &mut Bytes) -> Result<PathBuf> {
-        assert_len(buf, 2)?;
-        let path_len = buf.get_u16() as usize;
-        let path_bytes = buf.split_to(path_len);
+    async fn decode_path(buf: &mut BufReader<BidirectionalStream>) -> Result<PathBuf> {
+        let path_len = buf.read_u16().await? as usize;
+        let mut path_bytes = Vec::from_iter(std::iter::repeat(0u8).take(path_len));
+        buf.read_exact(&mut path_bytes).await?;
         Ok(PathBuf::from(String::from_utf8(path_bytes.to_vec())?))
     }
 
-    pub async fn send(self, stream: &mut BidirectionalStream) -> Result<()> {
+    pub async fn send(self, mut stream: BidirectionalStream) -> Result<()> {
         // send method
         let mut buf = BytesMut::with_capacity(3);
         buf.put_u16(MAGIC_NUMBER);
@@ -152,18 +157,13 @@ impl Method {
         stream.send(buf.freeze()).await?;
 
         // wait for resp
-        let mut buf = stream.receive().await?.ok_or(Error::StreamClosed)?;
-        assert_len(&buf, 1)?;
-        if buf.get_u8() != 0 {
-            assert_len(&buf, 2)?;
-            let msg_len = buf.get_u16() as usize;
-            let msg_bytes = buf.split_to(msg_len);
-            return Err(Error::FromServer(String::from_utf8(msg_bytes.to_vec())?));
-        }
+        let buf = BufReader::new(stream);
+        assert_reply(buf).await?;
         Ok(())
     }
 }
 
+#[derive(Debug)]
 pub struct File {
     /// file absolute path
     path: PathBuf,
@@ -171,28 +171,60 @@ pub struct File {
     is_dir: bool,
     /// permission
     permission: u32,
+    /// file size
+    file_size: u64
 }
 
 impl File {
     pub async fn handle_recv(mut stream: BidirectionalStream, path: PathBuf) -> Result<()> {
-        let mut buf = stream.receive().await?.ok_or(Error::StreamClosed)?;
+        let (recv_stream, send_stream) = stream.split();
+        let mut buf_stream = BufReader::new(recv_stream);
+        match Self::recv(&mut send_stream, path).await {
+            Ok(_) => {
+                println!("Send okkk");
+                Ok(stream.send(Bytes::from_static(&[0u8])).await?)
+            }
+            Err(e) => {
+                println!("Send errrr");
+                let mut buf = BytesMut::new();
+                let msg = e.to_string();
+                buf.put_u16(msg.len() as u16);
+                buf.put_slice(msg.as_bytes());
+                Ok(stream.send(buf.freeze()).await?)
+            }
+        }
+    }
+    pub async fn recv(stream: &mut BufReader<BidirectionalStream>, path: PathBuf) -> Result<()> {
+        println!("recvvvvvv 1");
+        // first chunk, metadata
         let metadata = Self::decode(&mut buf)?;
         if metadata.is_dir {
             fs::create_dir_all(path.join(metadata.path)).await?;
             return Ok(());
         }
+        println!("{:?}", metadata);
+        println!("path: {}", path.display());
 
+        // second chunks, file content
         // write file
+        let file_name = metadata
+            .path
+            .file_name()
+            .ok_or(Error::Io(io::Error::from(io::ErrorKind::NotFound)))?;
         let file = OpenOptions::new()
             .append(true)
             .create(true)
-            .open(path.join(metadata.path))
+            .open(path.join(file_name))
             .await?;
         file.set_permissions(Permissions::from_mode(metadata.permission))
             .await?;
         let mut bw = BufWriter::new(file.try_clone().await?);
         let mut checksum = digest::Context::new(&digest::SHA256);
-        while let Some(buf) = stream.receive().await? {
+        let mut writed = 0u64;
+        for writed < metadata.file_size {
+            println!("recvvvvvv 2");
+            let buf = stream.receive().await?.ok_or(Error::StreamClosed)?;
+            println!("recvvvvvv 2.1");
             // add checksum
             checksum.update(&buf);
             // write to file
@@ -200,50 +232,64 @@ impl File {
         }
         bw.flush().await?;
         let checksum = checksum.finish();
-        // check total bytes count
-        let writed = file.metadata().await?.len();
-        let mut buf = stream.receive().await?.ok_or(Error::BytesMalformed)?;
+
+        // third chunk, file size and checksum
+        println!("recvvvvvv 3");
+        let mut buf = stream.receive().await?.ok_or(Error::StreamClosed)?;
+        println!("recvvvvvv 3.1");
         assert_len(&buf, 8)?;
         if writed != buf.get_u64() {
-            return Err(Error::BytesMalformed);
+            return Err(Error::BytesMalformed(
+                "Writed miss match file size".to_string(),
+            ));
         }
         // checksum verify
         assert_len(&buf, 32)?;
         if checksum.as_ref() != buf.split_to(32) {
-            return Err(Error::BytesMalformed);
+            return Err(Error::BytesMalformed("Checksum miss match".to_string()));
         }
+        println!("recvvvvv ok");
         Ok(())
     }
 
-    fn decode(buf: &mut Bytes) -> Result<Self> {
+    async fn decode(buf: &mut BufReader<BidirectionalStream>) -> Result<Self> {
         // path
-        assert_len(buf, 2)?;
-        let path_len = buf.get_u16() as usize;
-        assert_len(buf, path_len)?;
-        let path_bytes = buf.split_to(path_len).to_vec();
-        let path = PathBuf::from(String::from_utf8(path_bytes)?);
+        let path_len = buf.read_u16().await? as usize;
+        let mut path_bytes = Vec::from_iter(std::iter::repeat(0u8).take(path_len));
+        buf.read_exact(&mut path_bytes).await?;
+        let path = PathBuf::from(String::from_utf8(path_bytes.to_vec())?);
         // is dir
-        assert_len(buf, 1)?;
-        let is_dir = buf.get_u8() == 1;
+        let is_dir = buf.read_u8().await? == 1;
+        if is_dir {
+            return Ok(Self{
+                path,
+                is_dir,
+                permission: 0,
+                    file_size: 0
+            });
+        }
 
         // permission
-        assert_len(buf, 4)?;
-        let permission = buf.get_u32();
+        let permission = buf.read_u32().await?;
+                // file size
+                let file_size = buf.read_u64().await?;
 
-        Ok(File {
+
+        Ok(Self{
             path,
             is_dir,
             permission,
+            file_size,
         })
     }
 
     pub async fn handle_send(mut stream: BidirectionalStream, path: PathBuf) -> Result<()> {
         if !path.exists() {
-            return Err(Error::BytesMalformed);
+            return Err(Error::Io(io::Error::from(io::ErrorKind::NotFound)));
         }
         let mut buf = BytesMut::new();
         // path
-        let path_bytes = path.to_str().ok_or(Error::BytesMalformed)?.as_bytes();
+        let path_bytes = path.to_str().ok_or(Error::Utf8)?.as_bytes();
         buf.put_u16(path_bytes.len() as u16);
         buf.put_slice(path_bytes);
         // is dir
@@ -259,37 +305,68 @@ impl File {
         let file_size = metadata.len();
         let permission = metadata.permissions().mode();
         buf.put_u32(permission);
+        // file chunk count
+        let chunks = if file_size == 0 {
+            0
+        } else {
+            (file_size / (FRAME_SIZE as u64) + 1) as u16
+        };
+        buf.put_u16(chunks);
+        // first send, file metadata
+        stream.send(buf.freeze()).await?;
 
         // read file
         let mut br = BufReader::new(file);
-        let read_buf = Box::new([0u8; FRAME_SIZE]);
+        let mut read_buf = Box::new([0u8; FRAME_SIZE]);
         let mut checksum = digest::Context::new(&digest::SHA256);
         loop {
-            let read = br.read(&mut buf).await?;
+            let read = br.read(&mut *read_buf).await?;
             if read == 0 {
                 break;
             }
             // send chunk
             let frame = Bytes::from(read_buf[0..read].to_vec());
             checksum.update(&frame);
+            // second send file content
+            println!("send file content chunk!!! {}", read);
             stream.send(frame).await?;
             if read < FRAME_SIZE {
                 break;
             }
         }
+
         let mut buf = BytesMut::new();
         // file size
         buf.put_u64(file_size);
         // checksum
         buf.put_slice(checksum.finish().as_ref());
+        // third send, file size and checksum
         stream.send(buf.freeze()).await?;
+
+        // wait for reply
+        println!("waittttt");
+        let mut buf = stream.receive().await?.ok_or(Error::StreamClosed)?;
+        println!("waittttt 1");
+        assert_reply(&mut buf)?;
         Ok(())
     }
 }
 
-fn assert_len(buf: &Bytes, len: usize) -> Result<()> {
+async fn assert_reply(buf: BufReader<BidirectionalStream>) -> Result<()> {
+    if buf.read_u8().await? != 0 {
+        let msg_len = buf.get_u16() as usize;
+        let msg_bytes = buf.split_to(msg_len);
+        return Err(Error::FromPeer(String::from_utf8(msg_bytes.to_vec())?));
+    }
+
+    Ok(())
+}
+
+fn assert_len(buf: &mut BidirectionalStream, len: usize) -> Result<()> {
     if buf.len() < len {
-        return Err(Error::BytesMalformed);
+        return Err(Error::BytesMalformed(format!(
+            "Not enough bytes, expected {len}"
+        )));
     }
     Ok(())
 }
