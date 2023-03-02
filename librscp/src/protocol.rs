@@ -136,11 +136,19 @@ impl Method {
         // send method
         let mut buf = BytesMut::with_capacity(3);
         buf.put_u16(MAGIC_NUMBER);
-        let n = match self {
-            Method::Get(_) => 0x01,
-            Method::Post(_) => 0x02,
+        let path = match self {
+            Method::Get(path) => {
+                buf.put_u8(0x01);
+                path
+            }
+            Method::Post(path) => {
+                buf.put_u8(0x02);
+                path
+            }
         };
-        buf.put_u8(n);
+        let path = path.to_str().ok_or(Error::Utf8)?;
+        buf.put_u16(path.len() as u16);
+        buf.put_slice(path.as_bytes());
         stream.send(buf.freeze()).await?;
 
         // wait for resp
