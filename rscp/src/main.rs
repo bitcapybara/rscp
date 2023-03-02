@@ -15,7 +15,7 @@ pub struct Opt {
     #[arg(long = "log_level", default_value = "info", env = "RSCP_LOG_LEVEL")]
     log_level: String,
     /// Start as a server
-    #[arg(short = 's')]
+    #[arg(id = "server", short = 's')]
     server: bool,
     /// Serve port (for server) or remote port (for client)
     #[arg(short = 'p', default_value = "3322", env = "RSCP_PORT")]
@@ -24,11 +24,11 @@ pub struct Opt {
     #[arg(short = 'c', env = "RSCP_CA_DIR")]
     ca_path: PathBuf,
     /// Source path
-    #[arg(required = false, required_unless_present = "server")]
-    source: String,
+    #[arg(required_unless_present = "server")]
+    source: Option<String>,
     /// Target path
-    #[arg(required = false, required_unless_present = "server")]
-    target: String,
+    #[arg(required_unless_present = "server")]
+    target: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -59,7 +59,7 @@ fn main() -> anyhow::Result<()> {
         info!("server start at {}", opts.port);
         run(Endpoint::new(provider, addr)?.start_server())?;
     } else {
-        let (source, target) = (opts.source, opts.target);
+        let (source, target) = (opts.source.unwrap(), opts.target.unwrap());
         let (remote_addr, action) = match (source.split_once(':'), target.split_once(':')) {
             (Some((remote_ip, remote_path)), None) => (
                 SocketAddr::new(remote_ip.parse()?, opts.port),
