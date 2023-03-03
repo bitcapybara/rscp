@@ -93,18 +93,6 @@ struct FileMeta {
 
 pub struct ProtocolStream(BufStream<BidirectionalStream>);
 
-impl ProtocolStream {
-    pub fn new(stream: BidirectionalStream) -> Self {
-        Self(BufStream::new(stream))
-    }
-}
-
-impl AsRef<BufStream<BidirectionalStream>> for ProtocolStream {
-    fn as_ref(&self) -> &BufStream<BidirectionalStream> {
-        &self.0
-    }
-}
-
 impl AsMut<BufStream<BidirectionalStream>> for ProtocolStream {
     fn as_mut(&mut self) -> &mut BufStream<BidirectionalStream> {
         &mut self.0
@@ -112,6 +100,14 @@ impl AsMut<BufStream<BidirectionalStream>> for ProtocolStream {
 }
 
 impl ProtocolStream {
+    pub fn new(stream: BidirectionalStream) -> Self {
+        Self(BufStream::new(stream))
+    }
+
+    async fn close(self) -> Result<()> {
+        Ok(self.0.into_inner().close().await?)
+    }
+
     pub async fn method_recv(&mut self) -> Result<Method> {
         match self.method_decode().await {
             Ok(method) => {
@@ -126,6 +122,7 @@ impl ProtocolStream {
                 buf.put_u16(msg.len() as u16);
                 buf.put_slice(msg.as_bytes());
                 self.as_mut().write_buf(&mut buf.freeze()).await?;
+                self.as_mut().flush().await?;
                 Err(e)
             }
         }
@@ -206,7 +203,7 @@ impl ProtocolStream {
                 self.as_mut().write_all(&buf.freeze()).await?;
             }
         }
-        self.0.into_inner().close().await.ok();
+        self.close().await.ok();
         Ok(())
     }
 
