@@ -12,7 +12,7 @@ use tokio::fs;
 
 use crate::{
     mtls::MtlsProvider,
-    protocol::{self, File, Method},
+    protocol::{self, Method, ProtocolStream},
 };
 
 type Result<T> = std::result::Result<T, Error>;
@@ -128,11 +128,12 @@ impl Endpoint {
 
     async fn handle_conn(mut conn: Connection) -> Result<()> {
         // first recv handshake message
-        let stream = conn
+        let bi_stream = conn
             .accept_bidirectional_stream()
             .await?
             .ok_or(Error::ConnClosed)?;
-        match Method::recv(stream).await {
+        let mut stream = ProtocolStream::new(bi_stream);
+        match stream.method_recv().await {
             Ok(action) => match action {
                 Method::Get(path) => handle_send_file(&mut conn, path).await?,
                 Method::Post(path) => handle_recv_file(&mut conn, path).await?,
@@ -153,17 +154,18 @@ impl Endpoint {
         let connect = Connect::new(self.addr).with_server_name("localhost");
         let mut conn = client.connect(connect).await?;
         // send method to server
-        let stream = conn.open_bidirectional_stream().await?;
+        let bi_stream = conn.open_bidirectional_stream().await?;
+        let mut stream = ProtocolStream::new(bi_stream);
         match action {
             Action::Get(PathTuple { local, remote }) => {
                 // send get message
-                Method::Get(remote).send(stream).await?;
+                stream.method_send(Method::Get(remote)).await?;
                 // recv files
                 handle_recv_file(&mut conn, local.clone()).await?;
             }
             Action::Post(PathTuple { local, remote }) => {
                 // send post message
-                Method::Post(remote).send(stream).await?;
+                stream.method_send(Method::Post(remote)).await?;
                 // send files
                 handle_send_file(&mut conn, local).await?;
             }
@@ -175,8 +177,9 @@ impl Endpoint {
 async fn handle_recv_file(conn: &mut Connection, path: PathBuf) -> Result<()> {
     // recv files
     let mut futs = Vec::new();
-    while let Ok(Some(stream)) = conn.accept_bidirectional_stream().await {
-        let (task, handle) = File::handle_recv(stream, path.clone()).remote_handle();
+    while let Ok(Some(bi_stream)) = conn.accept_bidirectional_stream().await {
+        let stream = ProtocolStream::new(bi_stream);
+        let (task, handle) = stream.handle_file_recv(path.clone()).remote_handle();
         tokio::spawn(task);
         futs.push((path.clone(), handle));
     }
@@ -194,8 +197,9 @@ async fn handle_send_file(conn: &mut Connection, path: PathBuf) -> Result<()> {
     let mut futs = Vec::with_capacity(paths.len());
     for path in paths {
         // coroutine per file
-        let stream = conn.open_bidirectional_stream().await?;
-        let (task, handle) = File::handle_send(stream, path.clone()).remote_handle();
+        let bi_stream = conn.open_bidirectional_stream().await?;
+        let stream = ProtocolStream::new(bi_stream);
+        let (task, handle) = stream.handle_file_send(path.clone()).remote_handle();
         tokio::spawn(task);
         futs.push((path, handle));
     }
