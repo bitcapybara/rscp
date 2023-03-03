@@ -2,12 +2,12 @@
 
 a rust implementation of scp
 
-* [*] QUIC bidirectional stream
-* [*] SHA256 checksum
-* [*] One coroutine per file
+* [x] QUIC bidirectional stream
+* [x] SHA256 checksum
+* [x] One coroutine per file
 * [ ] DER CA format support
 * [ ] Dry run mode
-* [ ] File compress
+* [ ] File compress, File content chrunk
 
 ## TLS
 * 企业内部生成私有CA，签发给每台主机
