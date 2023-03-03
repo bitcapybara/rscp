@@ -93,12 +93,6 @@ struct FileMeta {
 
 pub struct ProtocolStream(BufStream<BidirectionalStream>);
 
-impl AsMut<BufStream<BidirectionalStream>> for ProtocolStream {
-    fn as_mut(&mut self) -> &mut BufStream<BidirectionalStream> {
-        &mut self.0
-    }
-}
-
 impl ProtocolStream {
     pub fn new(stream: BidirectionalStream) -> Self {
         Self(BufStream::new(stream))
@@ -108,11 +102,15 @@ impl ProtocolStream {
         Ok(self.0.into_inner().close().await?)
     }
 
+    fn buf(&mut self) -> &mut BufStream<BidirectionalStream> {
+        &mut self.0
+    }
+
     pub async fn method_recv(&mut self) -> Result<Method> {
         match self.method_decode().await {
             Ok(method) => {
-                self.as_mut().write_all(&[0u8; 1]).await?;
-                self.as_mut().flush().await?;
+                self.buf().write_all(&[0u8; 1]).await?;
+                self.buf().flush().await?;
                 Ok(method)
             }
             Err(e) => {
@@ -121,8 +119,8 @@ impl ProtocolStream {
                 let msg = e.to_string();
                 buf.put_u16(msg.len() as u16);
                 buf.put_slice(msg.as_bytes());
-                self.as_mut().write_buf(&mut buf.freeze()).await?;
-                self.as_mut().flush().await?;
+                self.buf().write_buf(&mut buf.freeze()).await?;
+                self.buf().flush().await?;
                 Err(e)
             }
         }
@@ -130,11 +128,11 @@ impl ProtocolStream {
 
     async fn method_decode(&mut self) -> Result<Method> {
         // magic number
-        if self.as_mut().read_u16().await? != MAGIC_NUMBER {
+        if self.buf().read_u16().await? != MAGIC_NUMBER {
             return Err(Error::MissMagicNumber);
         }
         // action
-        match self.as_mut().read_u8().await? {
+        match self.buf().read_u8().await? {
             0x01 => {
                 // check path exists
                 let path = self.method_decode_path().await?;
@@ -149,9 +147,9 @@ impl ProtocolStream {
     }
 
     async fn method_decode_path(&mut self) -> Result<PathBuf> {
-        let path_len = self.as_mut().read_u16().await? as usize;
+        let path_len = self.buf().read_u16().await? as usize;
         let mut path_bytes = Vec::from_iter(std::iter::repeat(0u8).take(path_len));
-        self.as_mut().read_exact(&mut path_bytes).await?;
+        self.buf().read_exact(&mut path_bytes).await?;
         Ok(PathBuf::from(String::from_utf8(path_bytes.to_vec())?))
     }
 
@@ -172,8 +170,8 @@ impl ProtocolStream {
         let path = path.to_str().ok_or(Error::Utf8)?;
         buf.put_u16(path.len() as u16);
         buf.put_slice(path.as_bytes());
-        self.as_mut().write_all(&buf.freeze()).await?;
-        self.as_mut().flush().await?;
+        self.buf().write_all(&buf.freeze()).await?;
+        self.buf().flush().await?;
 
         // wait for resp
         self.assert_reply().await?;
@@ -181,10 +179,10 @@ impl ProtocolStream {
     }
 
     async fn assert_reply(&mut self) -> Result<()> {
-        if self.as_mut().read_u8().await? != 0 {
-            let msg_len = self.as_mut().read_u16().await? as usize;
+        if self.buf().read_u8().await? != 0 {
+            let msg_len = self.buf().read_u16().await? as usize;
             let mut msg_bytes = vec![0u8; msg_len];
-            self.as_mut().read_exact(&mut msg_bytes).await?;
+            self.buf().read_exact(&mut msg_bytes).await?;
             return Err(Error::FromPeer(String::from_utf8(msg_bytes.to_vec())?));
         }
         Ok(())
@@ -193,14 +191,14 @@ impl ProtocolStream {
     pub async fn handle_file_recv(mut self, path: PathBuf) -> Result<()> {
         match self.recv_file(path).await {
             Ok(_) => {
-                self.as_mut().write_all(&[0u8; 1]).await?;
+                self.buf().write_all(&[0u8; 1]).await?;
             }
             Err(e) => {
                 let mut buf = BytesMut::new();
                 let msg = e.to_string();
                 buf.put_u16(msg.len() as u16);
                 buf.put_slice(msg.as_bytes());
-                self.as_mut().write_all(&buf.freeze()).await?;
+                self.buf().write_all(&buf.freeze()).await?;
             }
         }
         self.close().await.ok();
@@ -233,27 +231,27 @@ impl ProtocolStream {
         let mut writed = 0u64;
         let mut buf = Box::new([0u8; FRAME_SIZE]);
         while writed < metadata.file_size {
-            let read = self.as_mut().read(&mut *buf).await?;
+            let read = self.buf().read(&mut *buf).await?;
             let bytes = &buf[0..read];
             // add checksum
             checksum.update(bytes);
             // write to file
             bw.write_all(bytes).await?;
-            self.as_mut().flush().await?;
+            self.buf().flush().await?;
             writed += read as u64;
         }
         bw.flush().await?;
         let checksum = checksum.finish();
 
         // third chunk, file size and checksum
-        if writed != self.as_mut().read_u64().await? {
+        if writed != self.buf().read_u64().await? {
             return Err(Error::BytesMalformed(
                 "Writed miss match file size".to_string(),
             ));
         }
         // checksum verify
         let mut checksum_bytes = Box::new([0u8; 32]);
-        self.as_mut().read_exact(&mut *checksum_bytes).await?;
+        self.buf().read_exact(&mut *checksum_bytes).await?;
         if checksum.as_ref() != *checksum_bytes {
             return Err(Error::BytesMalformed("Checksum miss match".to_string()));
         }
@@ -262,12 +260,12 @@ impl ProtocolStream {
 
     async fn decode_meta(&mut self) -> Result<FileMeta> {
         // path
-        let path_len = self.as_mut().read_u16().await? as usize;
+        let path_len = self.buf().read_u16().await? as usize;
         let mut path_bytes = Vec::from_iter(std::iter::repeat(0u8).take(path_len));
-        self.as_mut().read_exact(&mut path_bytes).await?;
+        self.buf().read_exact(&mut path_bytes).await?;
         let path = PathBuf::from(String::from_utf8(path_bytes.to_vec())?);
         // is dir
-        let is_dir = self.as_mut().read_u8().await? == 1;
+        let is_dir = self.buf().read_u8().await? == 1;
         if is_dir {
             return Ok(FileMeta {
                 path,
@@ -278,9 +276,9 @@ impl ProtocolStream {
         }
 
         // permission
-        let permission = self.as_mut().read_u32().await?;
+        let permission = self.buf().read_u32().await?;
         // file size
-        let file_size = self.as_mut().read_u64().await?;
+        let file_size = self.buf().read_u64().await?;
 
         Ok(FileMeta {
             path,
@@ -315,8 +313,8 @@ impl ProtocolStream {
         // file chunk count
         buf.put_u64(file_size);
         // first send, file metadata
-        self.as_mut().write_all(&buf.freeze()).await?;
-        self.as_mut().flush().await?;
+        self.buf().write_all(&buf.freeze()).await?;
+        self.buf().flush().await?;
 
         // read file
         let mut br = BufReader::new(file);
@@ -331,8 +329,8 @@ impl ProtocolStream {
             let frame = Bytes::from(read_buf[0..read].to_vec());
             checksum.update(&frame);
             // second send file content
-            self.as_mut().write_all(&frame).await?;
-            self.as_mut().flush().await?;
+            self.buf().write_all(&frame).await?;
+            self.buf().flush().await?;
             if read < FRAME_SIZE {
                 break;
             }
@@ -344,8 +342,8 @@ impl ProtocolStream {
         // checksum
         buf.put_slice(checksum.finish().as_ref());
         // third send, file size and checksum
-        self.as_mut().write_all(&buf.freeze()).await?;
-        self.as_mut().flush().await?;
+        self.buf().write_all(&buf.freeze()).await?;
+        self.buf().flush().await?;
 
         // wait for reply
         self.assert_reply().await?;
