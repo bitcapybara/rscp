@@ -1,0 +1,23 @@
+name: Rust
+
+on: push
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - name: Run fmt
+      run: cargo fmt --check
+    - name: Run clippy
+      run: |
+        cargo clippy --no-deps -- -D warnings
+        cargo clippy --examples --no-deps -- -D warnings
+    - name: Run tests
+      run: cargo test
+
