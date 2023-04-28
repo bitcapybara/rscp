@@ -9,4 +9,4 @@ clap = { version = "4.1.7", features = ["derive", "env"] }
 flexi_logger = "0.25.1"
 librscp = { version = "0.1.0", path = "../librscp" }
 log = "0.4.17"
-tokio = { version = "1.25.0", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.28.0", features = ["rt-multi-thread", "macros"] }
