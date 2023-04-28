@@ -7,3 +7,4 @@ members = [
 [workspace.dependencies]
 log = "0.4.17"
 tokio = "1.28.0"
+openssl = { version = "0.10.52", features = ["vendored"] }
