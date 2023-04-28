@@ -4,3 +4,6 @@ members = [
   "rscp"
 ]
 
+[workspace.dependencies]
+log = "0.4.17"
+tokio = "1.28.0"
