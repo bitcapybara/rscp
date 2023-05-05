@@ -1,7 +1,7 @@
 [workspace]
 members = [
   "librscp",
-  "rscp"
+  "bin"
 ]
 
 [workspace.dependencies]
