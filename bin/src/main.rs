@@ -1,10 +1,10 @@
-use std::{fs, future::Future, net::SocketAddr, path::PathBuf};
+use std::{fs, future::Future, path::PathBuf};
 
 use anyhow::bail;
 use clap::{arg, Parser};
 use flexi_logger::Logger;
 use librscp::{
-    endpoint::{Action, Endpoint, Error, PathTuple},
+    endpoint::{start_client, start_server, Action, Error, PathTuple},
     mtls::MtlsProvider,
 };
 use log::info;
@@ -28,10 +28,10 @@ pub struct Opt {
     ca_path: PathBuf,
     /// Source path
     #[arg(required_unless_present = "server")]
-    source: Option<String>,
+    source: Vec<String>,
     /// Target path
     #[arg(required_unless_present = "server")]
-    target: Option<String>,
+    target: Vec<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -60,31 +60,61 @@ fn main() -> anyhow::Result<()> {
     if opts.server {
         let addr = format!("{}:{}", opts.ip, opts.port).parse()?;
         info!("server start at {}", opts.port);
-        run(Endpoint::new(provider, addr)?.start_server())?;
+        run(start_server(provider, addr))?;
     } else {
-        let (source, target) = (opts.source.unwrap(), opts.target.unwrap());
-        let (remote_addr, action) = match (source.split_once(':'), target.split_once(':')) {
-            (Some((remote_ip, remote_path)), None) => (
-                SocketAddr::new(remote_ip.parse()?, opts.port),
-                Action::Get(PathTuple {
-                    local: PathBuf::from(target),
-                    remote: PathBuf::from(remote_path),
-                }),
-            ),
-            (None, Some((remote_ip, remote_path))) => (
-                SocketAddr::new(remote_ip.parse()?, opts.port),
-                Action::Post(PathTuple {
-                    local: PathBuf::from(source),
-                    remote: PathBuf::from(remote_path),
-                }),
-            ),
-            _ => bail!("Unexpect source/target path"),
-        };
+        let (source, target) = (opts.source, opts.target);
+        let mut actions = Vec::new();
+        match (source.len(), target.len()) {
+            (1, 2..) => {
+                let source_path = &source[0];
+                for target_path in &target {
+                    let action = build_actions(source_path, target_path, opts.port)?;
+                    actions.push(action)
+                }
+            }
+            (2.., 1) => {
+                let target_path = &target[0];
+                for source_path in &source {
+                    let action = build_actions(source_path, target_path, opts.port)?;
+                    actions.push(action)
+                }
+            }
+            (a @ 1.., b @ 1..) if a == b => {
+                for i in 0..a {
+                    let source_path = &source[i];
+                    let target_path = &target[i];
+                    let action = build_actions(source_path, target_path, opts.port)?;
+                    actions.push(action)
+                }
+            }
+            _ => bail!("incorrect source/target path numbers"),
+        }
         info!("client start");
-        run(Endpoint::new(provider, remote_addr)?.start_client(action))?;
+        run(start_client(provider, actions))?;
     }
 
     Ok(())
+}
+
+fn build_actions(source_path: &str, target_path: &str, port: u16) -> anyhow::Result<Action> {
+    let action = match (source_path.split_once(':'), target_path.split_once(':')) {
+        (Some((remote_ip, remote_path)), None) => Action::Get {
+            remote: format!("{}:{}", remote_ip, port).parse()?,
+            tuple: PathTuple {
+                local: PathBuf::from(target_path),
+                remote: PathBuf::from(remote_path),
+            },
+        },
+        (None, Some((remote_ip, remote_path))) => Action::Post {
+            remote: format!("{}:{}", remote_ip, port).parse()?,
+            tuple: PathTuple {
+                local: PathBuf::from(source_path),
+                remote: PathBuf::from(remote_path),
+            },
+        },
+        _ => bail!("Unexpect source/target path"),
+    };
+    Ok(action)
 }
 
 #[tokio::main]

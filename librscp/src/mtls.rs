@@ -13,6 +13,7 @@ static DEFAULT_CIPHERSUITES: &[rustls::SupportedCipherSuite] = &[
     rustls::cipher_suite::TLS13_CHACHA20_POLY1305_SHA256,
 ];
 
+#[derive(Clone)]
 pub struct MtlsProvider {
     root_store: rustls::RootCertStore,
     cert_chain: Vec<rustls::Certificate>,

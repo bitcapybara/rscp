@@ -85,10 +85,16 @@ impl From<protocol::Error> for Error {
 }
 
 pub enum Action {
-    /// cp remote:/path /path
-    Get(PathTuple),
-    /// cp /path remote:/path
-    Post(PathTuple),
+    /// rscp remote:/path /path
+    Get {
+        remote: SocketAddr,
+        tuple: PathTuple,
+    },
+    /// rscp /path remote:/path
+    Post {
+        remote: SocketAddr,
+        tuple: PathTuple,
+    },
 }
 
 pub struct PathTuple {
@@ -96,82 +102,88 @@ pub struct PathTuple {
     pub remote: PathBuf,
 }
 
-pub struct Endpoint {
-    provider: MtlsProvider,
-    addr: SocketAddr,
+pub async fn start_server(provider: MtlsProvider, addr: SocketAddr) -> Result<()> {
+    let mut server = s2n_quic::Server::builder()
+        .with_tls(provider)?
+        .with_io(addr)?
+        .start()?;
+    // conn per client
+    while let Some(conn) = server.accept().await {
+        // handle connection from client
+        let local = conn.local_addr()?;
+        let fut = handle_conn(conn);
+        tokio::spawn(async move {
+            if let Err(e) = fut.await {
+                error!("handle connection from client error: {e}, client addr: {local}");
+            }
+        });
+    }
+
+    Ok(())
 }
 
-impl Endpoint {
-    pub fn new(provider: MtlsProvider, addr: SocketAddr) -> Result<Self> {
-        Ok(Self { provider, addr })
-    }
-
-    pub async fn start_server(self) -> Result<()> {
-        let mut server = s2n_quic::Server::builder()
-            .with_tls(self.provider)?
-            .with_io(self.addr)?
-            .start()?;
-        // conn per client
-        while let Some(conn) = server.accept().await {
-            // handle connection from client
-            let local = conn.local_addr()?;
-            let fut = Self::handle_conn(conn);
-            tokio::spawn(async move {
-                if let Err(e) = fut.await {
-                    error!("handle connection from client error: {e}, client addr: {local}");
-                }
-            });
+async fn handle_conn(mut conn: Connection) -> Result<()> {
+    // first recv handshake message
+    let bi_stream = conn
+        .accept_bidirectional_stream()
+        .await?
+        .ok_or(Error::ConnClosed)?;
+    let mut stream = ProtocolStream::new(bi_stream);
+    match stream.method_recv().await {
+        Ok(action) => match action {
+            Method::Get(path) => handle_send_file(&mut conn, path).await?,
+            Method::Post(path) => handle_recv_file(&mut conn, path).await?,
+        },
+        Err(e) => {
+            error!("Decode Method error: {e}")
         }
-
-        Ok(())
     }
+    Ok(())
+}
 
-    async fn handle_conn(mut conn: Connection) -> Result<()> {
-        // first recv handshake message
-        let bi_stream = conn
-            .accept_bidirectional_stream()
-            .await?
-            .ok_or(Error::ConnClosed)?;
-        let mut stream = ProtocolStream::new(bi_stream);
-        match stream.method_recv().await {
-            Ok(action) => match action {
-                Method::Get(path) => handle_send_file(&mut conn, path).await?,
-                Method::Post(path) => handle_recv_file(&mut conn, path).await?,
-            },
-            Err(e) => {
-                error!("Decode Method error: {e}")
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn start_client(self, action: Action) -> Result<()> {
-        // build connection
-        let client: s2n_quic::Client = s2n_quic::Client::builder()
-            .with_tls(self.provider)?
-            .with_io("0.0.0.0:0")?
-            .start()?;
-        let connect = Connect::new(self.addr).with_server_name("localhost");
-        let mut conn = client.connect(connect).await?;
-        // send method to server
-        let bi_stream = conn.open_bidirectional_stream().await?;
-        let mut stream = ProtocolStream::new(bi_stream);
+pub async fn start_client(provider: MtlsProvider, actions: Vec<Action>) -> Result<()> {
+    for action in actions {
         match action {
-            Action::Get(PathTuple { local, remote }) => {
+            Action::Get {
+                remote: remote_addr,
+                tuple: PathTuple { local, remote },
+            } => {
+                // build connection
+                let mut conn = new_connector(provider.clone(), remote_addr).await?;
+                // send method to server
+                let bi_stream = conn.open_bidirectional_stream().await?;
+                let mut stream = ProtocolStream::new(bi_stream);
                 // send get message
                 stream.method_send(Method::Get(remote)).await?;
                 // recv files
                 handle_recv_file(&mut conn, local.clone()).await?;
             }
-            Action::Post(PathTuple { local, remote }) => {
+            Action::Post {
+                remote: remote_addr,
+                tuple: PathTuple { local, remote },
+            } => {
+                // build connection
+                let mut conn = new_connector(provider.clone(), remote_addr).await?;
+                // send method to server
+                let bi_stream = conn.open_bidirectional_stream().await?;
+                let mut stream = ProtocolStream::new(bi_stream);
                 // send post message
                 stream.method_send(Method::Post(remote)).await?;
                 // send files
                 handle_send_file(&mut conn, local).await?;
             }
         }
-        Ok(())
     }
+    Ok(())
+}
+
+async fn new_connector(provider: MtlsProvider, remote_addr: SocketAddr) -> Result<Connection> {
+    let client: s2n_quic::Client = s2n_quic::Client::builder()
+        .with_tls(provider)?
+        .with_io("0.0.0.0:0")?
+        .start()?;
+    let connect = Connect::new(remote_addr).with_server_name("localhost");
+    Ok(client.connect(connect).await?)
 }
 
 async fn handle_recv_file(conn: &mut Connection, path: PathBuf) -> Result<()> {
