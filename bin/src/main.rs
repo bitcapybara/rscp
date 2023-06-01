@@ -15,13 +15,16 @@ pub struct Opt {
     #[arg(long = "log_level", default_value = "info", env = "RSCP_LOG_LEVEL")]
     log_level: String,
     /// Start as a server
-    #[arg(id = "server", short = 's')]
+    #[arg(id = "server", short)]
     server: bool,
+    /// ip addr
+    #[arg(long, short, default_value = "0.0.0.0", env = "RSCP_SERVER_IP")]
+    ip: String,
     /// Serve port (for server) or remote port (for client)
-    #[arg(short = 'p', default_value = "3322", env = "RSCP_PORT")]
+    #[arg(short, default_value = "3322", env = "RSCP_SERVER_PORT")]
     port: u16,
     /// Directory include ca pem files   
-    #[arg(short = 'c', env = "RSCP_CA_DIR")]
+    #[arg(short, env = "RSCP_CA_DIR")]
     ca_path: PathBuf,
     /// Source path
     #[arg(required_unless_present = "server")]
@@ -55,7 +58,7 @@ fn main() -> anyhow::Result<()> {
 
     // build endpoint
     if opts.server {
-        let addr = SocketAddr::new("0.0.0.0".parse()?, opts.port);
+        let addr = format!("{}:{}", opts.ip, opts.port).parse()?;
         info!("server start at {}", opts.port);
         run(Endpoint::new(provider, addr)?.start_server())?;
     } else {
