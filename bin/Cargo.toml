@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.71"
-clap = { version = "4.3.4", features = ["derive", "env"] }
+clap = { version = "4.3.8", features = ["derive", "env"] }
 flexi_logger = "0.25.5"
 librscp = { version = "0.1.0", path = "../librscp" }
 log.workspace = true
