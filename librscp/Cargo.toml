@@ -8,7 +8,7 @@ bytes = "1.4.0"
 futures = "0.3.28"
 log.workspace = true
 ring = "0.16.20"
-rustls-pemfile = "1.0.2"
+rustls-pemfile = "1.0.3"
 openssl.workspace = true
 s2n-quic = { version = "1.22.0", features = ["provider-address-token-default", "provider-tls-rustls"] }
 tokio = { workspace = true, features = ["rt", "fs", "io-util"] }
