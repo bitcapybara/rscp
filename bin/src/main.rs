@@ -2,7 +2,7 @@ use std::{fs, future::Future, path::PathBuf};
 
 use anyhow::bail;
 use clap::{arg, Parser};
-use flexi_logger::Logger;
+use flexi_logger::{colored_detailed_format, Logger};
 use librscp::{
     endpoint::{start_client, start_server, Action, Error, PathTuple},
     mtls::MtlsProvider,
@@ -24,13 +24,13 @@ pub struct Opt {
     #[arg(short, default_value = "3322", env = "RSCP_SERVER_PORT")]
     port: u16,
     /// Directory include ca pem files   
-    #[arg(short, env = "RSCP_CA_DIR")]
+    #[arg(short, default_value = "./certs", env = "RSCP_CA_DIR")]
     ca_path: PathBuf,
     /// Source path
-    #[arg(required_unless_present = "server")]
+    #[arg(long, required = false)]
     source: Vec<String>,
     /// Target path
-    #[arg(required_unless_present = "server")]
+    #[arg(long, required = false)]
     target: Vec<String>,
 }
 
@@ -38,16 +38,18 @@ fn main() -> anyhow::Result<()> {
     // cli command args
     let opts = Opt::parse();
     // log init
-    Logger::try_with_str(opts.log_level)?
-        .log_to_stdout()
-        .start()?;
+    Logger::try_with_str(opts.log_level)
+        .unwrap()
+        .format(colored_detailed_format)
+        .start()
+        .unwrap();
     info!("logger init done");
     // ca
     let ca_path = &opts.ca_path;
     let (ca_file, cert_file, key_file) = if opts.server {
-        ("ca.pem", "server.pem", "server-key.pem")
+        ("ca-cert.pem", "server-cert.pem", "server-key.pem")
     } else {
-        ("ca.pem", "client.pem", "client-key.pem")
+        ("ca-cert.pem", "client-cert.pem", "client-key.pem")
     };
     let (ca, cert, key) = (
         fs::read(ca_path.join(ca_file))?,
@@ -98,15 +100,15 @@ fn main() -> anyhow::Result<()> {
 
 fn build_actions(source_path: &str, target_path: &str, port: u16) -> anyhow::Result<Action> {
     let action = match (source_path.split_once(':'), target_path.split_once(':')) {
-        (Some((remote_ip, remote_path)), None) => Action::Get {
-            remote: format!("{}:{}", remote_ip, port).parse()?,
+        (Some((remote_url, remote_path)), None) => Action::Get {
+            remote: format!("rscp://{}:{}", remote_url, port).parse()?,
             tuple: PathTuple {
                 local: PathBuf::from(target_path),
                 remote: PathBuf::from(remote_path),
             },
         },
-        (None, Some((remote_ip, remote_path))) => Action::Post {
-            remote: format!("{}:{}", remote_ip, port).parse()?,
+        (None, Some((remote_url, remote_path))) => Action::Post {
+            remote: format!("resp://{}:{}", remote_url, port).parse()?,
             tuple: PathTuple {
                 local: PathBuf::from(source_path),
                 remote: PathBuf::from(remote_path),

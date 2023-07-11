@@ -1,4 +1,4 @@
-use std::{fmt::Display, io, net::SocketAddr, path::PathBuf};
+use std::{io, net::SocketAddr, path::PathBuf};
 
 use futures::FutureExt;
 use log::error;
@@ -9,6 +9,7 @@ use s2n_quic::{
     Connection,
 };
 use tokio::fs;
+use url::Url;
 
 use crate::{
     mtls::MtlsProvider,
@@ -17,47 +18,20 @@ use crate::{
 
 type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// io error
-    Io(io::Error),
-    /// QUIC connection closed
-    ConnClosed,
-    /// TLS error
-    Tls(rustls::Error),
-    /// start up error
+    #[error("I/O error: {0}")]
+    Io(#[from] io::Error),
+    #[error("Invalid URL: {0}")]
+    Url(String),
+    #[error("TLS auth error: {0}")]
+    Tls(#[from] rustls::Error),
+    #[error("Endpoint start up error: {0}")]
     StartUp(String),
-    /// QUIC connection error
-    Connection(connection::Error),
-    /// protocol codec error
-    Protocol(protocol::Error),
-}
-
-impl std::error::Error for Error {}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::Io(e) => write!(f, "I/O error: {e}"),
-            Error::ConnClosed => write!(f, "QUIC connection already closed"),
-            Error::Tls(e) => write!(f, "TLS auth error: {e}"),
-            Error::StartUp(s) => write!(f, "Endpoint start up error: {s}"),
-            Error::Connection(e) => write!(f, "QUIC connection error: {e}"),
-            Error::Protocol(e) => write!(f, "Protocol parse error: {e}"),
-        }
-    }
-}
-
-impl From<io::Error> for Error {
-    fn from(e: io::Error) -> Self {
-        Error::Io(e)
-    }
-}
-
-impl From<rustls::Error> for Error {
-    fn from(e: rustls::Error) -> Self {
-        Error::Tls(e)
-    }
+    #[error("QUIC connection error: {0}")]
+    Connection(#[from] connection::Error),
+    #[error("Protocol codec error: {0}")]
+    Protocol(#[from] protocol::Error),
 }
 
 impl From<provider::StartError> for Error {
@@ -66,35 +40,11 @@ impl From<provider::StartError> for Error {
     }
 }
 
-impl From<std::convert::Infallible> for Error {
-    fn from(_: std::convert::Infallible) -> Self {
-        unreachable!()
-    }
-}
-
-impl From<connection::Error> for Error {
-    fn from(e: connection::Error) -> Self {
-        Error::Connection(e)
-    }
-}
-
-impl From<protocol::Error> for Error {
-    fn from(e: protocol::Error) -> Self {
-        Error::Protocol(e)
-    }
-}
-
 pub enum Action {
     /// rscp remote:/path /path
-    Get {
-        remote: SocketAddr,
-        tuple: PathTuple,
-    },
+    Get { remote: Url, tuple: PathTuple },
     /// rscp /path remote:/path
-    Post {
-        remote: SocketAddr,
-        tuple: PathTuple,
-    },
+    Post { remote: Url, tuple: PathTuple },
 }
 
 pub struct PathTuple {
@@ -104,7 +54,8 @@ pub struct PathTuple {
 
 pub async fn start_server(provider: MtlsProvider, addr: SocketAddr) -> Result<()> {
     let mut server = s2n_quic::Server::builder()
-        .with_tls(provider)?
+        .with_tls(provider)
+        .unwrap()
         .with_io(addr)?
         .start()?;
     // conn per client
@@ -124,10 +75,11 @@ pub async fn start_server(provider: MtlsProvider, addr: SocketAddr) -> Result<()
 
 async fn handle_conn(mut conn: Connection) -> Result<()> {
     // first recv handshake message
-    let bi_stream = conn
-        .accept_bidirectional_stream()
-        .await?
-        .ok_or(Error::ConnClosed)?;
+    let Some(bi_stream) = conn.accept_bidirectional_stream().await? else {
+        error!("QUIC connection closed");
+        return Ok(())
+    };
+
     let mut stream = ProtocolStream::new(bi_stream);
     match stream.method_recv().await {
         Ok(action) => match action {
@@ -145,11 +97,11 @@ pub async fn start_client(provider: MtlsProvider, actions: Vec<Action>) -> Resul
     for action in actions {
         match action {
             Action::Get {
-                remote: remote_addr,
+                remote: remote_url,
                 tuple: PathTuple { local, remote },
             } => {
                 // build connection
-                let mut conn = new_connector(provider.clone(), remote_addr).await?;
+                let mut conn = new_connector(provider.clone(), remote_url).await?;
                 // send method to server
                 let bi_stream = conn.open_bidirectional_stream().await?;
                 let mut stream = ProtocolStream::new(bi_stream);
@@ -177,12 +129,21 @@ pub async fn start_client(provider: MtlsProvider, actions: Vec<Action>) -> Resul
     Ok(())
 }
 
-async fn new_connector(provider: MtlsProvider, remote_addr: SocketAddr) -> Result<Connection> {
+async fn new_connector(provider: MtlsProvider, remote_url: Url) -> Result<Connection> {
+    let socket_addr = remote_url
+        .socket_addrs(|| None)?
+        .first()
+        .cloned()
+        .ok_or(Error::Url("Socket addr of url not found".to_string()))?;
+    let server_name = remote_url
+        .domain()
+        .ok_or(Error::Url("Domain of url not found".to_string()))?;
     let client: s2n_quic::Client = s2n_quic::Client::builder()
-        .with_tls(provider)?
+        .with_tls(provider)
+        .unwrap()
         .with_io("0.0.0.0:0")?
         .start()?;
-    let connect = Connect::new(remote_addr).with_server_name("localhost");
+    let connect = Connect::new(socket_addr).with_server_name(server_name);
     Ok(client.connect(connect).await?)
 }
 
