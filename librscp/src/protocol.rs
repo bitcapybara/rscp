@@ -3,7 +3,8 @@ use std::{
     string::FromUtf8Error,
 };
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
+use log::error;
 use ring::digest;
 use s2n_quic::stream::{self, BidirectionalStream};
 use tokio::{
@@ -98,8 +99,9 @@ impl ProtocolStream {
         Self(BufStream::new(stream))
     }
 
-    async fn close(self) -> Result<()> {
-        Ok(self.0.into_inner().close().await?)
+    async fn close(mut self) -> Result<()> {
+        self.0.flush().await?;
+        Ok(self.0.into_inner().finish()?)
     }
 
     fn buf(&mut self) -> &mut BufStream<BidirectionalStream> {
@@ -191,7 +193,7 @@ impl ProtocolStream {
     pub async fn handle_file_recv(mut self, path: PathBuf) -> Result<()> {
         match self.recv_file(path).await {
             Ok(_) => {
-                self.buf().write_all(&[0u8; 1]).await?;
+                self.buf().write_u8(0).await?;
             }
             Err(e) => {
                 let mut buf = BytesMut::new();
@@ -201,7 +203,9 @@ impl ProtocolStream {
                 self.buf().write_all(&buf.freeze()).await?;
             }
         }
-        self.close().await.ok();
+        if let Err(e) = self.close().await {
+            error!("close connection error: {e}")
+        }
         Ok(())
     }
 
@@ -220,8 +224,9 @@ impl ProtocolStream {
             .file_name()
             .ok_or(Error::Io(io::Error::from(io::ErrorKind::NotFound)))?;
         let file = OpenOptions::new()
-            .append(true)
             .create(true)
+            .write(true)
+            .truncate(true)
             .open(path.join(file_name))
             .await?;
         file.set_permissions(Permissions::from_mode(metadata.permission))
@@ -326,10 +331,10 @@ impl ProtocolStream {
                 break;
             }
             // send chunk
-            let frame = Bytes::from(read_buf[0..read].to_vec());
-            checksum.update(&frame);
+            let frame = &read_buf[0..read];
+            checksum.update(frame);
             // second send file content
-            self.buf().write_all(&frame).await?;
+            self.buf().write_all(frame).await?;
             self.buf().flush().await?;
             if read < FRAME_SIZE {
                 break;
