@@ -104,6 +104,12 @@ impl ProtocolStream {
         Ok(self.0.into_inner().finish()?)
     }
 
+    async fn drain(self) -> Result<()> {
+        let mut this = self.0.into_inner();
+        while this.receive().await?.is_some() {}
+        Ok(())
+    }
+
     fn buf(&mut self) -> &mut BufStream<BidirectionalStream> {
         &mut self.0
     }
@@ -352,6 +358,8 @@ impl ProtocolStream {
 
         // wait for reply
         self.assert_reply().await?;
+
+        self.drain().await?;
         Ok(())
     }
 }
