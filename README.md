@@ -2,10 +2,10 @@
 
 a rust implementation of scp, using QUIC protocol
 
-* [x] QUIC bidirectional stream
-* [x] SHA256 checksum
+## Features
+* [x] Use QUIC protocol
+* [x] Entire file SHA256 checksum
 * [x] One coroutine per file
-* [ ] DER CA format support
 * [ ] Dry run mode
 * [ ] File compress, File content chrunk
 
@@ -20,6 +20,6 @@ cargo run --bin rscp -- -s
 ### client
 
 ```bash
-cargo run --bin rscp localhost:src/path dst/path
-cargo run --bin rscp src/path localhost:dst/path
+cargo run --bin rscp -- --source localhost:src/path --target dst/path
+cargo run --bin rscp -- --source src/path --target localhost:dst/path
 ```
