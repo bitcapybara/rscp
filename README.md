@@ -3,18 +3,15 @@
 a rust implementation of scp, using QUIC protocol
 
 ## Features
-* [x] Use QUIC protocol
-* [x] Entire file SHA256 checksum
-* [x] One coroutine per file
-* [ ] Dry run mode
-* [ ] File compress, File content chrunk
+* Use QUIC protocol
+* Entire file SHA256 checksum
 
-## CMD
+## Usage
 
 ### server
 
 ```bash
-cargo run --bin rscp -- -s
+cargo run --bin rscp -- --server
 ```
 
 ### client

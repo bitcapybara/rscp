@@ -15,7 +15,7 @@ pub struct Opt {
     #[arg(long = "log_level", default_value = "info", env = "RSCP_LOG_LEVEL")]
     log_level: String,
     /// Start as a server
-    #[arg(id = "server", short)]
+    #[arg(long)]
     server: bool,
     /// ip addr
     #[arg(long, short, default_value = "0.0.0.0", env = "RSCP_SERVER_IP")]
@@ -27,10 +27,10 @@ pub struct Opt {
     #[arg(short, default_value = "./certs", env = "RSCP_CA_DIR")]
     ca_path: PathBuf,
     /// Source path
-    #[arg(long, required = false)]
+    #[arg(short, long, required = false, value_delimiter = ',')]
     source: Vec<String>,
     /// Target path
-    #[arg(long, required = false)]
+    #[arg(short, long, required = false, value_delimiter = ',')]
     target: Vec<String>,
 }
 
