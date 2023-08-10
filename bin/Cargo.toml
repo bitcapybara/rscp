@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.72"
 clap = { version = "4.3.16", features = ["derive", "env"] }
-flexi_logger = "0.25.5"
+flexi_logger = "0.25.6"
 librscp = { version = "0.1.0", path = "../librscp" }
 log.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
