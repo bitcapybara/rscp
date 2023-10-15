@@ -77,7 +77,7 @@ async fn handle_conn(mut conn: Connection) -> Result<()> {
     // first recv handshake message
     let Some(bi_stream) = conn.accept_bidirectional_stream().await? else {
         error!("QUIC connection closed");
-        return Ok(())
+        return Ok(());
     };
 
     let mut stream = ProtocolStream::new(bi_stream);
