@@ -10,7 +10,7 @@ log.workspace = true
 ring = "0.16.20"
 rustls-pemfile = "1.0.3"
 openssl.workspace = true
-s2n-quic = { version = "1.25.0", features = ["provider-address-token-default", "provider-tls-rustls"] }
+s2n-quic = { version = "1.29.0", features = ["provider-address-token-default", "provider-tls-rustls"] }
 tokio = { workspace = true, features = ["rt", "fs", "io-util"] }
 url = "2.4.0"
 thiserror = "1.0.49"
