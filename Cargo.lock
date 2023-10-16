@@ -712,7 +712,7 @@ dependencies = [
  "futures",
  "log",
  "openssl",
- "ring 0.16.20",
+ "ring 0.17.3",
  "rustls-pemfile",
  "s2n-quic",
  "thiserror",

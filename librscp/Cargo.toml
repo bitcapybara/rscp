@@ -7,7 +7,7 @@ edition = "2021"
 bytes = "1.4.0"
 futures = "0.3.28"
 log.workspace = true
-ring = "0.16.20"
+ring = "0.17.3"
 rustls-pemfile = "1.0.3"
 openssl.workspace = true
 s2n-quic = { version = "1.25.0", features = ["provider-address-token-default", "provider-tls-rustls"] }
