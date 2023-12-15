@@ -1129,7 +1129,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "zerocopy",
- "zerocopy-derive",
+ "zerocopy-derive 0.3.0",
 ]
 
 [[package]]
@@ -1154,7 +1154,7 @@ dependencies = [
  "s2n-quic-transport",
  "tokio",
  "zerocopy",
- "zerocopy-derive",
+ "zerocopy-derive 0.3.0",
  "zeroize",
 ]
 
@@ -1177,7 +1177,7 @@ dependencies = [
  "s2n-codec",
  "subtle",
  "zerocopy",
- "zerocopy-derive",
+ "zerocopy-derive 0.3.0",
 ]
 
 [[package]]
@@ -1805,12 +1805,12 @@ checksum = "1a515f5799fe4961cb532f983ce2b23082366b898e52ffbce459c86f67c8378a"
 
 [[package]]
 name = "zerocopy"
-version = "0.6.0"
+version = "0.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae0f717764196a220d8c58500e3a3595e2c9054f95d66267f9fd5f6e74ad0fec"
+checksum = "854e949ac82d619ee9a14c66a1b674ac730422372ccb759ce0c39cabcf2bf8e6"
 dependencies = [
  "byteorder",
- "zerocopy-derive",
+ "zerocopy-derive 0.6.6",
 ]
 
 [[package]]
@@ -1822,6 +1822,17 @@ dependencies = [
  "proc-macro2",
  "syn 1.0.109",
  "synstructure",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "125139de3f6b9d625c39e2efdd73d41bdac468ccd556556440e322be0e1bbd91"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.25",
 ]
 
 [[package]]
